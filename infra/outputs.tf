@@ -9,3 +9,8 @@ output "kurumsal_d1_database_id" {
   description = "emanet-kurumsal wrangler.jsonc → d1_databases[].database_id"
   value       = cloudflare_d1_database.kurumsal.id
 }
+
+output "merkez_d1_database_id" {
+  description = "emanet-merkez wrangler.jsonc → d1_databases[].database_id"
+  value       = cloudflare_d1_database.merkez.id
+}

@@ -5,7 +5,7 @@ workspace. Rationale: [docs/DESIGN.md §3](../docs/DESIGN.md).
 
 | File | Manages |
 |---|---|
-| `storage.tf` | D1 `emanet` (core) and `emanet-kurumsal`; R2 bucket `emanet-evidence`. EU jurisdiction, protected from destroy |
+| `storage.tf` | D1 `emanet` (core), `emanet-kurumsal` and `emanet-merkez`; R2 bucket `emanet-evidence`. EU jurisdiction, protected from destroy |
 | `worker.tf` | Custom domains `emanet-kurumsal`, `emanet-saha`, `emanet-merkez` `.2earl.com`, each switched on by a variable once its Worker exists |
 
 Not managed here: the 2earl.com zone and its settings (2earl/login `infra/`), Worker code, Worker
@@ -29,8 +29,8 @@ Terraform variable). Nothing in this directory may contain a secret.
 1. Create the HCP workspace `2earl-emanet` (VCS: 2earl/emanet-core, working directory `infra`,
    manual apply) with `CLOUDFLARE_API_TOKEN`. Merge, confirm the apply: the databases and the
    bucket exist.
-2. A PR puts `core_d1_database_id` into emanet-core's `wrangler.jsonc` and
-   `kurumsal_d1_database_id` into emanet-kurumsal's. Merge; approve the `deploy` runs: core first,
-   then Kurumsal (it binds to the core).
-3. Set the workspace variable `kurumsal_live = true` and apply: emanet-kurumsal.2earl.com is
-   attached. Later the same for `saha_live` and `merkez_live`.
+2. A PR puts `core_d1_database_id` into emanet-core's `wrangler.jsonc`, `kurumsal_d1_database_id`
+   into emanet-kurumsal's and `merkez_d1_database_id` into emanet-merkez's. Merge; approve the
+   `deploy` runs: core first, then Kurumsal and Merkez (they bind to the core).
+3. Set the workspace variables `kurumsal_live = true` and `merkez_live = true` and apply: the
+   two sites are attached. Later the same for `saha_live`.

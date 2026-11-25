@@ -35,6 +35,21 @@ resource "cloudflare_d1_database" "kurumsal" {
   }
 }
 
+# Emanet Merkez's own: staff sign-in sessions only.
+resource "cloudflare_d1_database" "merkez" {
+  account_id   = var.account_id
+  name         = "emanet-merkez"
+  jurisdiction = "eu"
+
+  read_replication = {
+    mode = "disabled"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # Agents' photos and the police, tow and custody documents (DESIGN §3 "Files"). Never public:
 # no custom domain, no r2.dev access; served through the apps only.
 resource "cloudflare_r2_bucket" "evidence" {
