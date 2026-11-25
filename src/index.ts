@@ -56,6 +56,18 @@ import {
   setPayoutRule,
   trialBalance,
 } from './ledger';
+import {
+  deprecateField,
+  listAgents,
+  listInvoices,
+  listPartners,
+  listPayouts,
+  partnerDetail,
+  resolveIdentity,
+  reviewDetail,
+  uninvoiced,
+  updatePartner,
+} from './control';
 import { checkPayoutRule } from './pricing';
 import { fail, now, ok, type Result } from './result';
 import { SETTING_DEFAULTS, readSettings, writeSetting, type SettingKey } from './settings';
@@ -329,6 +341,70 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   async trialBalance() {
     return ok(await trialBalance(this.env.DB));
+  }
+
+  async partners() {
+    return ok(await listPartners(this.env.DB));
+  }
+
+  async partner(partnerId: string) {
+    return partnerDetail(this.env.DB, partnerId, now());
+  }
+
+  async updatePartner(
+    staffId: string,
+    partnerId: string,
+    input: {
+      legalName: string;
+      vkn: string | null;
+      taxOffice: string | null;
+      kepAddress: string | null;
+      eInvoice: boolean;
+      reconfirmDays: number;
+    },
+  ) {
+    return updatePartner(this.env.DB, staffId, partnerId, input, now());
+  }
+
+  async deprecateField(staffId: string, fieldId: string) {
+    return deprecateField(this.env.DB, staffId, fieldId, now());
+  }
+
+  async agents(status: string | null = null) {
+    return ok(await listAgents(this.env.DB, status));
+  }
+
+  async payouts(status: string | null = null) {
+    return ok(await listPayouts(this.env.DB, status));
+  }
+
+  async invoices(partnerId: string | null = null) {
+    return ok(await listInvoices(this.env.DB, partnerId));
+  }
+
+  async uninvoiced() {
+    return ok(await uninvoiced(this.env.DB));
+  }
+
+  async review(reviewId: string) {
+    return reviewDetail(this.env.DB, reviewId);
+  }
+
+  async resolveIdentity(
+    staffId: string,
+    reviewId: string,
+    decision: { action: 'accept'; vin?: string } | { action: 'reject'; reason: string },
+  ) {
+    return resolveIdentity(this.env.DB, staffId, reviewId, decision, now());
+  }
+
+  async payoutRule() {
+    const row = await this.env.DB.prepare(
+      'SELECT rule, valid_from FROM payout_rules WHERE valid_from <= ? ORDER BY valid_from DESC, created_at DESC LIMIT 1',
+    )
+      .bind(now())
+      .first<{ rule: string; valid_from: number }>();
+    return ok(row ? { rule: JSON.parse(row.rule) as unknown, valid_from: row.valid_from } : null);
   }
 }
 
