@@ -125,6 +125,26 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     );
   }
 
+  /** How many of the partner's cases are in each status. */
+  async counts(orgId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    const { results } = await this.env.DB.prepare(
+      'SELECT status, count(*) AS n FROM cases WHERE partner_id = ? GROUP BY status',
+    )
+      .bind(partner.id)
+      .all<{ status: CaseStatus; n: number }>();
+    const counts: Record<CaseStatus, number> = {
+      pending_identity: 0,
+      active: 0,
+      delivered: 0,
+      withdrawn: 0,
+      expired: 0,
+    };
+    for (const row of results) counts[row.status] = row.n;
+    return ok(counts);
+  }
+
   /** The partner's fields (global and its own), for forms, CSV templates and the API schema. */
   async schema(orgId: string, entity: FieldEntity) {
     const partner = await partnerByOrg(this.env.DB, orgId);

@@ -25,6 +25,22 @@ describe('PartnerApi', () => {
     expect(await api.events('not-a-partner', null)).toMatchObject({ error: 'not_a_partner' });
   });
 
+  it('counts cases per status', async () => {
+    const partner = await activePartner();
+    unwrap(await upsertCase(db(), partner, caseInput(), 'u', T0));
+    unwrap(await upsertCase(db(), partner, caseInput({ vin: '' }), 'u', T0));
+    const counts = unwrap(
+      await (exports.PartnerApi as unknown as PartnerApi).counts(partner.orgId),
+    );
+    expect(counts).toEqual({
+      pending_identity: 1,
+      active: 1,
+      delivered: 0,
+      withdrawn: 0,
+      expired: 0,
+    });
+  });
+
   it('refuses writes for an organization that is not an active partner', async () => {
     expect(
       await (exports.PartnerApi as unknown as PartnerApi).upsertCase(
