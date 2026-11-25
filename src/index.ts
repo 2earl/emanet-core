@@ -10,6 +10,7 @@
  * that person may do here: partner status, agent status, claim ownership, approvals.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import { deleteOrganization, deleteUser, exportUser } from './account-events';
 import {
   confirmCases,
   createPartner,
@@ -328,6 +329,21 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   async trialBalance() {
     return ok(await trialBalance(this.env.DB));
+  }
+}
+
+/** For login: account and organization deletion, and "Download your data". */
+export class AccountEvents extends WorkerEntrypoint<Env> {
+  async deleteUser(userId: string): Promise<void> {
+    await deleteUser(this.env.DB, userId, now());
+  }
+
+  async exportUser(userId: string): Promise<Record<string, unknown>> {
+    return exportUser(this.env.DB, userId);
+  }
+
+  async deleteOrganization(orgId: string): Promise<void> {
+    await deleteOrganization(this.env.DB, orgId, now());
   }
 }
 
