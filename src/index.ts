@@ -10,6 +10,7 @@
  * that person may do here: partner status, agent status, claim ownership, approvals.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import { deleteOrganization, deleteUser, exportUser } from './account-events';
 import {
   confirmCases,
   createPartner,
@@ -125,6 +126,26 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     );
   }
 
+  /** How many of the partner's cases are in each status. */
+  async counts(orgId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    const { results } = await this.env.DB.prepare(
+      'SELECT status, count(*) AS n FROM cases WHERE partner_id = ? GROUP BY status',
+    )
+      .bind(partner.id)
+      .all<{ status: CaseStatus; n: number }>();
+    const counts: Record<CaseStatus, number> = {
+      pending_identity: 0,
+      active: 0,
+      delivered: 0,
+      withdrawn: 0,
+      expired: 0,
+    };
+    for (const row of results) counts[row.status] = row.n;
+    return ok(counts);
+  }
+
   /** The partner's fields (global and its own), for forms, CSV templates and the API schema. */
   async schema(orgId: string, entity: FieldEntity) {
     const partner = await partnerByOrg(this.env.DB, orgId);
@@ -133,24 +154,38 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     return ok(fields.filter((field) => field.visibility !== 'admin'));
   }
 
-  /** Events since a time, for polling and for the webhook sender. */
-  async events(orgId: string, since: number, limit = 100) {
+  /**
+   * Events after a cursor, oldest first, for polling and for the webhook sender. The cursor is
+   * "<created_at>.<id>" of the last event seen; events written in the same second are not skipped.
+   */
+  async events(orgId: string, cursor: string | null, limit = 100) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
+    let afterAt = 0;
+    let afterId = '';
+    if (cursor !== null) {
+      const match = /^(\d+)\.([0-9a-f-]{36})$/.exec(cursor);
+      if (!match) return fail('invalid_cursor');
+      afterAt = Number(match[1]);
+      afterId = match[2] ?? '';
+    }
     const { results } = await this.env.DB.prepare(
       `SELECT id, type, payload, created_at FROM outbox
-       WHERE partner_id = ? AND created_at > ? ORDER BY created_at, id LIMIT ?`,
+       WHERE partner_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))
+       ORDER BY created_at, id LIMIT ?`,
     )
-      .bind(partner.id, since, Math.min(Math.max(limit, 1), 500))
+      .bind(partner.id, afterAt, afterAt, afterId, Math.min(Math.max(limit, 1), 500))
       .all<{ id: string; type: string; payload: string; created_at: number }>();
-    return ok(
-      results.map((row) => ({
+    const last = results.at(-1);
+    return ok({
+      events: results.map((row) => ({
         id: row.id,
         type: row.type,
         data: JSON.parse(row.payload) as Record<string, unknown>,
         created_at: row.created_at,
       })),
-    );
+      next_cursor: last ? `${String(last.created_at)}.${last.id}` : cursor,
+    });
   }
 }
 
@@ -294,6 +329,21 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   async trialBalance() {
     return ok(await trialBalance(this.env.DB));
+  }
+}
+
+/** For login: account and organization deletion, and "Download your data". */
+export class AccountEvents extends WorkerEntrypoint<Env> {
+  async deleteUser(userId: string): Promise<void> {
+    await deleteUser(this.env.DB, userId, now());
+  }
+
+  async exportUser(userId: string): Promise<Record<string, unknown>> {
+    return exportUser(this.env.DB, userId);
+  }
+
+  async deleteOrganization(orgId: string): Promise<void> {
+    await deleteOrganization(this.env.DB, orgId, now());
   }
 }
 
