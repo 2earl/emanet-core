@@ -133,24 +133,38 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     return ok(fields.filter((field) => field.visibility !== 'admin'));
   }
 
-  /** Events since a time, for polling and for the webhook sender. */
-  async events(orgId: string, since: number, limit = 100) {
+  /**
+   * Events after a cursor, oldest first, for polling and for the webhook sender. The cursor is
+   * "<created_at>.<id>" of the last event seen; events written in the same second are not skipped.
+   */
+  async events(orgId: string, cursor: string | null, limit = 100) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
+    let afterAt = 0;
+    let afterId = '';
+    if (cursor !== null) {
+      const match = /^(\d+)\.([0-9a-f-]{36})$/.exec(cursor);
+      if (!match) return fail('invalid_cursor');
+      afterAt = Number(match[1]);
+      afterId = match[2] ?? '';
+    }
     const { results } = await this.env.DB.prepare(
       `SELECT id, type, payload, created_at FROM outbox
-       WHERE partner_id = ? AND created_at > ? ORDER BY created_at, id LIMIT ?`,
+       WHERE partner_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))
+       ORDER BY created_at, id LIMIT ?`,
     )
-      .bind(partner.id, since, Math.min(Math.max(limit, 1), 500))
+      .bind(partner.id, afterAt, afterAt, afterId, Math.min(Math.max(limit, 1), 500))
       .all<{ id: string; type: string; payload: string; created_at: number }>();
-    return ok(
-      results.map((row) => ({
+    const last = results.at(-1);
+    return ok({
+      events: results.map((row) => ({
         id: row.id,
         type: row.type,
         data: JSON.parse(row.payload) as Record<string, unknown>,
         created_at: row.created_at,
       })),
-    );
+      next_cursor: last ? `${String(last.created_at)}.${last.id}` : cursor,
+    });
   }
 }
 
