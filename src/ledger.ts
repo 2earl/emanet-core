@@ -323,48 +323,53 @@ export async function rejectDelivery(
   // Over RPC the flag may be anything; only a real `true` costs a strike.
   const strike = (input.strike as unknown) === true;
   const settings = await readSettings(db);
+  // The audit event's ID marks the claim as closed by this decision; everything else the decision
+  // changes happens only if that mark is there, so a second decision in the same moment does nothing.
+  const ref = newId();
+  const decided = 'EXISTS (SELECT 1 FROM claims WHERE id = ? AND close_ref = ?)';
   const results = await db.batch([
     db
       .prepare(
-        `UPDATE claims SET closed_at = ?, close_reason = 'rejected', close_note = ?
+        `UPDATE claims SET closed_at = ?, close_reason = 'rejected', close_note = ?, close_ref = ?
          WHERE id = ? AND closed_at IS NULL`,
       )
-      .bind(at, reason, claimId),
+      .bind(at, reason, ref, claimId),
     db
       .prepare(
         `UPDATE evidence SET status = 'rejected', reviewed_by = ?
-         WHERE claim_id = ? AND status = 'submitted'
-           AND EXISTS (SELECT 1 FROM claims WHERE id = ? AND closed_at = ? AND close_reason = 'rejected')`,
+         WHERE claim_id = ? AND status = 'submitted' AND ${decided}`,
       )
-      .bind(staffId, claimId, claimId, at),
+      .bind(staffId, claimId, claimId, ref),
     db
       .prepare(
         `UPDATE review_items SET status = 'resolved', resolved_by = ?, resolved_at = ?
-         WHERE kind = 'delivery' AND subject_id = ? AND status = 'open'`,
+         WHERE kind = 'delivery' AND subject_id = ? AND status = 'open' AND ${decided}`,
       )
-      .bind(staffId, at, claimId),
+      .bind(staffId, at, claimId, claimId, ref),
     cooldownStatement(db, claim.agent_id, claim.vehicle_id, at + settings.cooldown_hours * 3600),
     ...(strike
       ? [
           db
             .prepare(
-              `UPDATE agents SET strikes = strikes + 1, updated_at = ? WHERE user_id = ?
-                 AND EXISTS (SELECT 1 FROM claims WHERE id = ? AND closed_at = ? AND close_reason = 'rejected')`,
+              `UPDATE agents SET strikes = strikes + 1, updated_at = ? WHERE user_id = ? AND ${decided}`,
             )
-            .bind(at, claim.agent_id, claimId, at),
+            .bind(at, claim.agent_id, claimId, ref),
         ]
       : []),
-    auditStatementIf(
-      db,
-      at,
-      `staff:${staffId}`,
-      'delivery.rejected',
-      `claim:${claimId}`,
-      { reason, strike, vehicle: claim.vehicle_id },
-      `EXISTS (SELECT 1 FROM claims WHERE id = ? AND closed_at = ? AND close_reason = 'rejected')`,
-      claimId,
-      at,
-    ),
+    db
+      .prepare(
+        `INSERT INTO audit_events (id, at, actor, action, subject, detail)
+         SELECT ?, ?, ?, 'delivery.rejected', ?, ? WHERE ${decided}`,
+      )
+      .bind(
+        ref,
+        at,
+        `staff:${staffId}`,
+        `claim:${claimId}`,
+        JSON.stringify({ reason, strike, vehicle: claim.vehicle_id }),
+        claimId,
+        ref,
+      ),
   ]);
   if (results[0]?.meta.changes !== 1) return fail('conflict_retry');
   return ok({ strikes: claim.strikes + (strike ? 1 : 0) });

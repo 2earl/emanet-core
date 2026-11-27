@@ -1,6 +1,9 @@
 -- Why a claim ended, for the agent to read: staff's reason when a delivery isn't accepted
 -- (docs/DESIGN.md §7, Review queue).
 ALTER TABLE claims ADD COLUMN close_note TEXT;
+-- The audit event that records that decision: what else the decision changes (photos, a strike)
+-- is tied to it, so two people deciding in the same second can't both apply it.
+ALTER TABLE claims ADD COLUMN close_ref TEXT;
 
 -- A money event is booked once. Two staff pressing the same button at the same moment would
 -- otherwise both pass the status check and both write the entry; now the second batch fails as a

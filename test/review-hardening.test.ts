@@ -217,6 +217,24 @@ describe('a delivery under review', () => {
     );
   });
 
+  it('doesn’t hold another creditor’s case that is still waiting for its identity', async () => {
+    const { vehicleId } = await reported();
+    const plate = await db()
+      .prepare('SELECT plate FROM vehicle_plates WHERE vehicle_id = ? AND valid_to IS NULL')
+      .bind(vehicleId)
+      .first<{ plate: string }>();
+    // No VIN: linked to the vehicle by its plate, pending until staff confirm.
+    const other = await activePartner();
+    const pending = unwrap(
+      await upsertCase(db(), other, caseInput({ vin: '', plate: plate?.plate ?? '' }), 'u', T0),
+    );
+    expect(pending.status).toBe('pending_identity');
+    // Withdrawn like any other case: nothing tells this partner about the delivery.
+    expect(
+      unwrap(await withdrawCase(db(), other, pending.id, 'mistake', 'u', T0 + 2 * HOUR)).status,
+    ).toBe('withdrawn');
+  });
+
   it('leaves the queue when its claim ends another way', async () => {
     const { agent, claim } = await reported();
     expect(await openReview(claim.id)).not.toBeNull();
@@ -501,5 +519,29 @@ describe('the audit log', () => {
       actor: `partner:${partner.id}/user-1`,
       detail: { what: 'emk_abc' },
     });
+  });
+});
+
+describe('two staff deciding at once', () => {
+  it('apply a rejection and its strike once', async () => {
+    const { agent, claim } = await reported();
+    const at = T0 + 2 * HOUR;
+    const results = await Promise.all([
+      rejectDelivery(db(), 'staff-1', claim.id, { reason: 'wrong car', strike: true }, at),
+      rejectDelivery(db(), 'staff-2', claim.id, { reason: 'wrong car', strike: true }, at),
+    ]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    const row = await db()
+      .prepare('SELECT strikes FROM agents WHERE user_id = ?')
+      .bind(agent)
+      .first<{ strikes: number }>();
+    expect(row?.strikes).toBe(1);
+    const events = await db()
+      .prepare(
+        `SELECT count(*) AS n FROM audit_events WHERE subject = ? AND action = 'delivery.rejected'`,
+      )
+      .bind(`claim:${claim.id}`)
+      .first<{ n: number }>();
+    expect(events?.n).toBe(1);
   });
 });

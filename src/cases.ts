@@ -728,8 +728,12 @@ export async function upsertCase(
  * in, so the vehicle is (as far as anyone knows) already in the car park. Until staff decide, a
  * case on it can't be changed, withdrawn or left to expire: taking the case away at that moment
  * would cancel a delivery the agent has already made, and the fee with it.
+ *
+ * Only for the partner's active case, which that delivery is about to close. A case still waiting
+ * for its identity isn't part of the delivery, and holding it would tell its partner something
+ * about another creditor's vehicle (the no-oracle rule, DESIGN §4.3).
  */
-const IN_DELIVERY_REVIEW = `EXISTS (
+const IN_DELIVERY_REVIEW = `cases.status = 'active' AND EXISTS (
   SELECT 1 FROM claims cl JOIN review_items r
     ON r.kind = 'delivery' AND r.subject_id = cl.id AND r.status = 'open'
   WHERE cl.vehicle_id = cases.vehicle_id AND cl.closed_at IS NULL)`;
@@ -800,7 +804,7 @@ export async function withdrawCase(
       .prepare(
         `UPDATE cases SET status = 'withdrawn', closed_reason = ?, updated_at = ?
          WHERE id = ? AND partner_id = ? AND status IN ('active', 'pending_identity')
-           AND NOT ${IN_DELIVERY_REVIEW}`,
+           AND NOT (${IN_DELIVERY_REVIEW})`,
       )
       .bind(reason.trim(), at, caseId, partner.id),
     auditStatementIf(
@@ -819,10 +823,7 @@ export async function withdrawCase(
   if (result[0]?.meta.changes !== 1) {
     const current = await getCase(db, partner.id, caseId);
     if (!current.ok) return current;
-    if (
-      (current.value.status === 'active' || current.value.status === 'pending_identity') &&
-      (await inDeliveryReview(db, caseId))
-    ) {
+    if (current.value.status === 'active' && (await inDeliveryReview(db, caseId))) {
       return fail('delivery_in_review');
     }
     return fail('case_closed');
@@ -837,7 +838,7 @@ export async function expireCases(db: D1Database, at: number): Promise<number> {
     .prepare(
       `SELECT id, partner_id, external_ref FROM cases
        WHERE status IN ('active', 'pending_identity') AND expires_at <= ?
-         AND NOT ${IN_DELIVERY_REVIEW} LIMIT 500`,
+         AND NOT (${IN_DELIVERY_REVIEW}) LIMIT 500`,
     )
     .bind(at)
     .all<{ id: string; partner_id: string; external_ref: string }>();
@@ -891,8 +892,10 @@ export async function redactClosedCasePlaces(db: D1Database, at: number): Promis
     .prepare(
       `UPDATE case_places SET address = '', lat = NULL, lng = NULL, note = NULL, attributes = '{}'
        WHERE address != '' AND case_id IN (
-         SELECT id FROM cases WHERE status IN ('delivered', 'withdrawn', 'expired')
-           AND updated_at <= ? LIMIT 500)`,
+         SELECT c.id FROM cases c WHERE c.status IN ('delivered', 'withdrawn', 'expired')
+           AND c.updated_at <= ?
+           AND EXISTS (SELECT 1 FROM case_places p WHERE p.case_id = c.id AND p.address != '')
+         LIMIT 500)`,
     )
     .bind(at - PLACE_RETENTION_DAYS * DAY)
     .run();
