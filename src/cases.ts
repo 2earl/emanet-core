@@ -7,7 +7,8 @@
  *   creditor already pursues gets the same answer as for a vehicle nobody pursues: telling it
  *   otherwise would disclose someone's debt (Banking Law 73).
  */
-import { auditStatement, outboxStatement } from './audit';
+import { auditStatement, auditStatementIf, outboxStatement } from './audit';
+import { orphanReviewsStatement } from './claims';
 import { fieldsFor, validateAttributes, visibleAttributes } from './fields';
 import { normalizePlate, normalizeVin } from './normalize';
 import { checkPriceList, feeFor, type PriceList } from './pricing';
@@ -116,6 +117,7 @@ export async function setPartnerStatus(
   staffId: string,
   at: number,
 ): Promise<Result<null>> {
+  if (!['invited', 'active', 'suspended'].includes(status)) return fail('invalid_status');
   const result = await db.batch([
     db
       .prepare('UPDATE partners SET status = ?, updated_at = ? WHERE id = ?')
@@ -605,6 +607,9 @@ export async function upsertCase(
 
   if (existing) {
     if (existing.status === 'delivered') return fail('case_closed');
+    if (existing.status === 'active' && (await inDeliveryReview(db, existing.id))) {
+      return fail('delivery_in_review');
+    }
     if (storedSnapshot?.vin && storedSnapshot.vin !== vin) return fail('vin_mismatch');
     caseId = existing.id;
     status = existing.status === 'pending_identity' ? 'pending_identity' : 'active';
@@ -718,6 +723,29 @@ export async function upsertCase(
   return getCase(db, partner.id, caseId);
 }
 
+/**
+ * True while staff are checking a reported delivery of this vehicle: the custodian's receipt is
+ * in, so the vehicle is (as far as anyone knows) already in the car park. Until staff decide, a
+ * case on it can't be changed, withdrawn or left to expire: taking the case away at that moment
+ * would cancel a delivery the agent has already made, and the fee with it.
+ *
+ * Only for the partner's active case, which that delivery is about to close. A case still waiting
+ * for its identity isn't part of the delivery, and holding it would tell its partner something
+ * about another creditor's vehicle (the no-oracle rule, DESIGN §4.3).
+ */
+const IN_DELIVERY_REVIEW = `cases.status = 'active' AND EXISTS (
+  SELECT 1 FROM claims cl JOIN review_items r
+    ON r.kind = 'delivery' AND r.subject_id = cl.id AND r.status = 'open'
+  WHERE cl.vehicle_id = cases.vehicle_id AND cl.closed_at IS NULL)`;
+
+async function inDeliveryReview(db: D1Database, caseId: string): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT 1 AS yes FROM cases WHERE id = ? AND ${IN_DELIVERY_REVIEW}`)
+    .bind(caseId)
+    .first();
+  return row !== null;
+}
+
 function reviewStatement(
   db: D1Database,
   kind: 'plate_conflict' | 'missing_vin',
@@ -775,14 +803,30 @@ export async function withdrawCase(
     db
       .prepare(
         `UPDATE cases SET status = 'withdrawn', closed_reason = ?, updated_at = ?
-         WHERE id = ? AND partner_id = ? AND status IN ('active', 'pending_identity')`,
+         WHERE id = ? AND partner_id = ? AND status IN ('active', 'pending_identity')
+           AND NOT (${IN_DELIVERY_REVIEW})`,
       )
       .bind(reason.trim(), at, caseId, partner.id),
-    auditStatement(db, at, actor, 'case.withdrawn', `case:${caseId}`, { reason: reason.trim() }),
+    auditStatementIf(
+      db,
+      at,
+      actor,
+      'case.withdrawn',
+      `case:${caseId}`,
+      { reason: reason.trim() },
+      `EXISTS (SELECT 1 FROM cases WHERE id = ? AND partner_id = ? AND status = 'withdrawn' AND updated_at = ?)`,
+      caseId,
+      partner.id,
+      at,
+    ),
   ]);
   if (result[0]?.meta.changes !== 1) {
     const current = await getCase(db, partner.id, caseId);
-    return current.ok ? fail('case_closed') : current;
+    if (!current.ok) return current;
+    if (current.value.status === 'active' && (await inDeliveryReview(db, caseId))) {
+      return fail('delivery_in_review');
+    }
+    return fail('case_closed');
   }
   await releaseClaimsWithoutHunt(db, at);
   return getCase(db, partner.id, caseId);
@@ -793,7 +837,8 @@ export async function expireCases(db: D1Database, at: number): Promise<number> {
   const { results } = await db
     .prepare(
       `SELECT id, partner_id, external_ref FROM cases
-       WHERE status IN ('active', 'pending_identity') AND expires_at <= ? LIMIT 500`,
+       WHERE status IN ('active', 'pending_identity') AND expires_at <= ?
+         AND NOT (${IN_DELIVERY_REVIEW}) LIMIT 500`,
     )
     .bind(at)
     .all<{ id: string; partner_id: string; external_ref: string }>();
@@ -821,12 +866,44 @@ export async function expireCases(db: D1Database, at: number): Promise<number> {
  * vehicle nobody may take. No cooldown: the agent did nothing wrong.
  */
 export async function releaseClaimsWithoutHunt(db: D1Database, at: number): Promise<void> {
-  await db
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE claims SET closed_at = ?, close_reason = 'revoked'
+         WHERE closed_at IS NULL AND NOT EXISTS (
+           SELECT 1 FROM cases c WHERE c.vehicle_id = claims.vehicle_id AND c.status = 'active')`,
+      )
+      .bind(at),
+    orphanReviewsStatement(db, at),
+  ]);
+}
+
+/** How long a closed case keeps its street addresses (docs/DESIGN.md §8, Retention). */
+export const PLACE_RETENTION_DAYS = 30;
+
+/**
+ * Cron: thirty days after a case closes (delivered, withdrawn or expired), the debtor's addresses
+ * it carried are erased: street address, coordinates, note and custom fields. District and city
+ * stay, so the partner's reports by city still add up. A case the partner sends again becomes
+ * active and is left alone; it brings its places with it.
+ */
+export async function redactClosedCasePlaces(db: D1Database, at: number): Promise<number> {
+  const result = await db
     .prepare(
-      `UPDATE claims SET closed_at = ?, close_reason = 'revoked'
-       WHERE closed_at IS NULL AND NOT EXISTS (
-         SELECT 1 FROM cases c WHERE c.vehicle_id = claims.vehicle_id AND c.status = 'active')`,
+      `UPDATE case_places SET address = '', lat = NULL, lng = NULL, note = NULL, attributes = '{}'
+       WHERE address != '' AND case_id IN (
+         SELECT c.id FROM cases c WHERE c.status IN ('delivered', 'withdrawn', 'expired')
+           AND c.updated_at <= ?
+           AND EXISTS (SELECT 1 FROM case_places p WHERE p.case_id = c.id AND p.address != '')
+         LIMIT 500)`,
     )
-    .bind(at)
+    .bind(at - PLACE_RETENTION_DAYS * DAY)
     .run();
+  const redacted = result.meta.changes;
+  if (redacted > 0) {
+    await auditStatement(db, at, 'system', 'retention.places_redacted', 'case_places', {
+      places: redacted,
+    }).run();
+  }
+  return redacted;
 }

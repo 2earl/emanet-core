@@ -36,7 +36,35 @@ export async function registerAgent(
   return ok(null);
 }
 
-/** Staff move an agent through KYC, or suspend and ban. Suspension ends the agent's claims. */
+const AGENT_STATUSES: readonly AgentStatus[] = [
+  'applied',
+  'kyc_pending',
+  'active',
+  'suspended',
+  'banned',
+];
+
+/**
+ * Open delivery reviews whose claim has ended some other way (revoked, expired, account deleted):
+ * nothing is left to confirm, so they leave the queue. Batched with whatever ended the claims.
+ */
+export function orphanReviewsStatement(db: D1Database, at: number): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE review_items SET status = 'resolved', resolved_by = 'system', resolved_at = ?
+       WHERE kind = 'delivery' AND status = 'open'
+         AND subject_id IN (SELECT id FROM claims WHERE closed_at IS NOT NULL)`,
+    )
+    .bind(at);
+}
+
+/**
+ * Staff move an agent through KYC, or suspend and ban. Suspension ends the agent's claims.
+ *
+ * An agent becomes active only from the identity check (or back from a suspension), and only with
+ * the application they sent: the rules accepted, and a name, phone and IBAN to check them against.
+ * Staff can't skip the application by setting the status directly.
+ */
 export async function setAgentStatus(
   db: D1Database,
   agentId: string,
@@ -45,11 +73,43 @@ export async function setAgentStatus(
   reason: string,
   at: number,
 ): Promise<Result<null>> {
+  if (!AGENT_STATUSES.includes(status)) return fail('invalid_status');
+  const cause = typeof reason === 'string' ? reason.trim().slice(0, 200) : '';
+  if (!cause) return fail('invalid_reason');
+  const current = await db
+    .prepare(
+      'SELECT status, legal_name, phone, iban, terms_accepted_at FROM agents WHERE user_id = ?',
+    )
+    .bind(agentId)
+    .first<{
+      status: AgentStatus;
+      legal_name: string | null;
+      phone: string | null;
+      iban: string | null;
+      terms_accepted_at: number | null;
+    }>();
+  if (!current) return fail('not_found');
+  if (status === 'active') {
+    if (current.status !== 'kyc_pending' && current.status !== 'suspended') {
+      return fail('agent_not_ready', current.status);
+    }
+    if (
+      current.terms_accepted_at === null ||
+      !current.legal_name ||
+      !current.phone ||
+      !current.iban
+    ) {
+      return fail('agent_not_ready', 'application');
+    }
+  }
   const statements = [
     db
-      .prepare('UPDATE agents SET status = ?, updated_at = ? WHERE user_id = ?')
-      .bind(status, at, agentId),
-    auditStatement(db, at, `staff:${staffId}`, `agent.${status}`, `agent:${agentId}`, { reason }),
+      .prepare('UPDATE agents SET status = ?, updated_at = ? WHERE user_id = ? AND status = ?')
+      .bind(status, at, agentId, current.status),
+    auditStatement(db, at, `staff:${staffId}`, `agent.${status}`, `agent:${agentId}`, {
+      reason: cause,
+      from: current.status,
+    }),
   ];
   if (status === 'suspended' || status === 'banned') {
     statements.push(
@@ -59,10 +119,11 @@ export async function setAgentStatus(
            WHERE agent_id = ? AND closed_at IS NULL`,
         )
         .bind(at, agentId),
+      orphanReviewsStatement(db, at),
     );
   }
   const results = await db.batch(statements);
-  return results[0]?.meta.changes === 1 ? ok(null) : fail('not_found');
+  return results[0]?.meta.changes === 1 ? ok(null) : fail('conflict_retry');
 }
 
 async function agentOf(
@@ -186,10 +247,11 @@ export async function expireClaims(db: D1Database, at: number): Promise<number> 
       auditStatement(db, at, 'system', 'claim.expired', `claim:${claim.id}`),
     ]),
   );
+  await orphanReviewsStatement(db, at).run();
   return results.length;
 }
 
-function cooldownStatement(
+export function cooldownStatement(
   db: D1Database,
   agentId: string,
   vehicleId: string,
@@ -415,7 +477,22 @@ export async function recordSighting(
 ): Promise<Result<Claim>> {
   const claim = await openClaim(db, agentId, claimId, at);
   if (!claim) return fail('not_found');
-  if (Math.abs(sighting.lat) > 90 || Math.abs(sighting.lng) > 180) return fail('invalid_location');
+  // Values arrive over RPC from a phone: NaN passes a plain range check.
+  if (
+    !Number.isFinite(sighting.lat) ||
+    !Number.isFinite(sighting.lng) ||
+    Math.abs(sighting.lat) > 90 ||
+    Math.abs(sighting.lng) > 180
+  ) {
+    return fail('invalid_location');
+  }
+  if (!Number.isFinite(sighting.taken_at)) return fail('invalid_time');
+  const accuracy =
+    sighting.accuracy_m !== undefined &&
+    Number.isFinite(sighting.accuracy_m) &&
+    sighting.accuracy_m >= 0
+      ? Math.min(sighting.accuracy_m, 100_000)
+      : null;
   // A device clock more than ten minutes off, or a time before the claim, isn't believable.
   if (sighting.taken_at > at + 600 || sighting.taken_at < claim.claimed_at - 600) {
     return fail('invalid_time');
@@ -433,8 +510,8 @@ export async function recordSighting(
         claimId,
         sighting.lat,
         sighting.lng,
-        sighting.accuracy_m ?? null,
-        sighting.taken_at,
+        accuracy,
+        Math.floor(sighting.taken_at),
         at,
       ),
     db
@@ -447,6 +524,17 @@ export async function recordSighting(
 
 export type EvidenceKind =
   'scene' | 'police_report' | 'tow_report' | 'yediemin_receipt' | 'yediemin_vehicle';
+const EVIDENCE_KINDS: readonly EvidenceKind[] = [
+  'scene',
+  'police_report',
+  'tow_report',
+  'yediemin_receipt',
+  'yediemin_vehicle',
+];
+/** Photos one claim can hold: far more than a delivery needs, far fewer than would fill storage. */
+export const MAX_EVIDENCE_PER_CLAIM = 40;
+const finiteOrNull = (value: number | undefined, limit: number): number | null =>
+  value !== undefined && Number.isFinite(value) && Math.abs(value) <= limit ? value : null;
 
 /** A photo the agent took in the app. The same file can't be used twice, on any claim. */
 export async function addEvidence(
@@ -466,7 +554,22 @@ export async function addEvidence(
   const claim = await openClaim(db, agentId, claimId, at);
   if (!claim) return fail('not_found');
   if (claim.state !== 'reporting') return fail('no_sighting');
-  if (!/^[0-9a-f]{64}$/.test(evidence.sha256)) return fail('invalid_hash');
+  if (!EVIDENCE_KINDS.includes(evidence.kind)) return fail('invalid_kind');
+  if (typeof evidence.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(evidence.sha256)) {
+    return fail('invalid_hash');
+  }
+  if (
+    typeof evidence.file_ref !== 'string' ||
+    !evidence.file_ref ||
+    evidence.file_ref.length > 300
+  ) {
+    return fail('invalid_file');
+  }
+  const held = await db
+    .prepare('SELECT count(*) AS n FROM evidence WHERE claim_id = ?')
+    .bind(claimId)
+    .first<{ n: number }>();
+  if ((held?.n ?? 0) >= MAX_EVIDENCE_PER_CLAIM) return fail('too_much_evidence');
   const id = newId();
   try {
     await db.batch([
@@ -481,9 +584,9 @@ export async function addEvidence(
           evidence.kind,
           evidence.file_ref,
           evidence.sha256,
-          evidence.exif_time ?? null,
-          evidence.exif_lat ?? null,
-          evidence.exif_lng ?? null,
+          finiteOrNull(evidence.exif_time, 1e11),
+          finiteOrNull(evidence.exif_lat, 90),
+          finiteOrNull(evidence.exif_lng, 180),
           at,
         ),
       auditStatement(db, at, `agent:${agentId}`, 'evidence.added', `claim:${claimId}`, {

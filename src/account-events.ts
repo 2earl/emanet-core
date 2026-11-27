@@ -1,4 +1,5 @@
 import { auditStatement } from './audit';
+import { orphanReviewsStatement } from './claims';
 
 /**
  * What login tells Emanet when an account or an organization is deleted, and what it asks for
@@ -27,6 +28,7 @@ export async function deleteUser(db: D1Database, userId: string, at: number): Pr
       .bind(at, userId),
     db.prepare('DELETE FROM kyc_checks WHERE agent_id = ?').bind(userId),
     db.prepare('DELETE FROM cooldowns WHERE agent_id = ?').bind(userId),
+    orphanReviewsStatement(db, at),
     auditStatement(db, at, 'system', 'account.deleted', `agent:${userId}`),
   ]);
 }
@@ -86,12 +88,14 @@ export async function deleteOrganization(db: D1Database, orgId: string, at: numb
       .bind(partner.id),
     auditStatement(db, at, 'system', 'organization.deleted', `partner:${partner.id}`),
   ]);
-  await db
-    .prepare(
-      `UPDATE claims SET closed_at = ?, close_reason = 'revoked'
-       WHERE closed_at IS NULL AND NOT EXISTS (
-         SELECT 1 FROM cases c WHERE c.vehicle_id = claims.vehicle_id AND c.status = 'active')`,
-    )
-    .bind(at)
-    .run();
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE claims SET closed_at = ?, close_reason = 'revoked'
+         WHERE closed_at IS NULL AND NOT EXISTS (
+           SELECT 1 FROM cases c WHERE c.vehicle_id = claims.vehicle_id AND c.status = 'active')`,
+      )
+      .bind(at),
+    orphanReviewsStatement(db, at),
+  ]);
 }

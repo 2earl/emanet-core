@@ -25,6 +25,7 @@ import {
   createPartner,
   expireCases,
   getCase,
+  redactClosedCasePlaces,
   listCases,
   partnerByOrg,
   setPartnerStatus,
@@ -59,6 +60,8 @@ import {
 import {
   confirmDelivery,
   issueInvoice,
+  rejectDelivery,
+  setInvoiceNumber,
   markPayoutSent,
   orderPayout,
   recordReceipt,
@@ -66,6 +69,7 @@ import {
   trialBalance,
 } from './ledger';
 import {
+  auditLog,
   deprecateField,
   listAgents,
   verifyAgentIban,
@@ -115,7 +119,15 @@ import { sendNotices } from './notices';
 import { checkPayoutRule } from './pricing';
 import { provider, providerForStaff, setProvider } from './provider';
 import { fail, now, ok, type Result } from './result';
-import { SETTING_DEFAULTS, readSettings, writeSetting, type SettingKey } from './settings';
+import { readSettings, settingAllowed, writeSetting, type SettingKey } from './settings';
+
+const INTEGRATION_ACTIONS: readonly string[] = [
+  'key_created',
+  'key_revoked',
+  'webhook_created',
+  'webhook_deleted',
+  'webhook_enabled',
+];
 
 async function activePartner(db: D1Database, orgId: string): Promise<Result<Partner>> {
   const partner = await partnerByOrg(db, orgId);
@@ -300,6 +312,25 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
       `partner:${partner.id}/${actor}`,
       now(),
     );
+  }
+
+  /**
+   * Emanet Kurumsal keeps API keys and webhooks itself; the core's audit log is where a change to
+   * them is recorded, beside everything else done in the partner's name.
+   */
+  async recordIntegration(orgId: string, actor: string, action: string, what: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    if (!INTEGRATION_ACTIONS.includes(action)) return fail('invalid_action');
+    await auditStatement(
+      this.env.DB,
+      now(),
+      `partner:${partner.id}/${typeof actor === 'string' ? actor.slice(0, 64) : ''}`,
+      `integration.${action}`,
+      `partner:${partner.id}`,
+      { what: typeof what === 'string' ? what.slice(0, 100) : '' },
+    ).run();
+    return ok(null);
   }
 
   /** How many of the partner's cases are in each status. */
@@ -548,9 +579,7 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   async setSetting(staffId: string, key: SettingKey, value: number) {
-    if (!(key in SETTING_DEFAULTS) || !Number.isFinite(value) || value < 0) {
-      return fail('invalid_setting');
-    }
+    if (!settingAllowed(key, value)) return fail('invalid_setting');
     await writeSetting(this.env.DB, key, value, staffId, now()).run();
     return ok(null);
   }
@@ -580,8 +609,41 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return confirmDelivery(this.env.DB, staffId, claimId, now());
   }
 
+  /** The evidence doesn't hold up: the claim ends, the agent reads why, nothing is booked. */
+  async rejectDelivery(
+    staffId: string,
+    claimId: string,
+    input: { reason: string; strike: boolean },
+  ) {
+    return rejectDelivery(this.env.DB, staffId, claimId, input, now());
+  }
+
   async issueInvoice(staffId: string, partnerId: string) {
     return issueInvoice(this.env.DB, staffId, partnerId, now());
+  }
+
+  /** The number the e-invoice provider gave an invoice. */
+  async setInvoiceNumber(
+    staffId: string,
+    invoiceId: string,
+    input: { number: string; uuid?: string | null },
+  ) {
+    return setInvoiceNumber(this.env.DB, staffId, invoiceId, input, now());
+  }
+
+  /** Who did what, newest first. Reading it is itself recorded. */
+  async audit(
+    staffId: string,
+    query: { subject?: string; actor?: string; before?: number; limit?: number },
+  ) {
+    const result = await auditLog(this.env.DB, query);
+    if (result.ok && (query.subject ?? query.actor)) {
+      await auditStatement(this.env.DB, now(), `staff:${staffId}`, 'staff.viewed', 'audit', {
+        subject: query.subject ?? null,
+        actor: query.actor ?? null,
+      }).run();
+    }
+    return result;
   }
 
   async recordReceipt(
@@ -712,12 +774,24 @@ export default {
 
   scheduled(_controller, env, ctx): void {
     const at = now();
+    // Each job on its own: one that fails doesn't stop the ones after it. Only the job's name and
+    // the error's name are logged, never data.
+    const jobs: [string, () => Promise<unknown>][] = [
+      ['expireClaims', () => expireClaims(env.DB, at)],
+      ['expireCases', () => expireCases(env.DB, at)],
+      ['onboarding', () => remindAndExpire(env.DB, mailer(env), origins(env), at)],
+      ['notices', () => sendNotices(env.DB, mailer(env), env.KURUMSAL_ORIGIN, at)],
+      ['retention', () => redactClosedCasePlaces(env.DB, at)],
+    ];
     ctx.waitUntil(
       (async () => {
-        await expireClaims(env.DB, at);
-        await expireCases(env.DB, at);
-        await remindAndExpire(env.DB, mailer(env), origins(env), at);
-        await sendNotices(env.DB, mailer(env), env.KURUMSAL_ORIGIN, at);
+        for (const [name, job] of jobs) {
+          try {
+            await job();
+          } catch (error) {
+            console.error(`cron ${name} failed`, error instanceof Error ? error.name : 'error');
+          }
+        }
       })(),
     );
   },
