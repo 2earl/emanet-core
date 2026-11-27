@@ -81,7 +81,9 @@ export async function listAgents(db: D1Database, status: string | null): Promise
   const { results } = await db
     .prepare(
       `SELECT a.user_id, a.status, a.legal_name, a.city, a.phone, a.iban, a.tax_profile, a.vkn,
-         a.strikes, a.created_at, a.submitted_at, a.terms_version,
+         a.strikes, a.created_at, a.submitted_at, a.terms_version, a.birth_year,
+         CASE WHEN a.email_verified_at IS NOT NULL THEN a.email END AS email,
+         a.tckn_hash IS NOT NULL AS id_given,
          a.iban_verified_at IS NOT NULL AS iban_verified,
          (SELECT count(*) FROM claims c WHERE c.agent_id = a.user_id AND c.closed_at IS NULL) AS open_claims,
          (SELECT count(*) FROM claims c WHERE c.agent_id = a.user_id AND c.close_reason = 'delivered') AS deliveries
@@ -207,7 +209,10 @@ export async function reviewDetail(
         .all(),
       db
         .prepare(
-          'SELECT id, kind, file_ref, sha256, exif_time, exif_lat, exif_lng, status, created_at FROM evidence WHERE claim_id = ? ORDER BY created_at',
+          `SELECT e.id, e.kind, e.file_ref, e.sha256, e.exif_time, e.exif_lat, e.exif_lng, e.status, e.created_at,
+             x.file_ref IS NOT NULL AS erased
+           FROM evidence e LEFT JOIN erased_files x ON x.file_ref = e.file_ref
+           WHERE e.claim_id = ? ORDER BY e.created_at`,
         )
         .bind(item.subject_id)
         .all(),

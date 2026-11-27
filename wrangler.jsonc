@@ -12,9 +12,21 @@
   "workers_dev": false,
   "preview_urls": false,
 
-  // Invocation logs could record vehicle and agent data.
+  // Logs, traces and Issues in Cloudflare (docs/DESIGN.md §12). The code logs structured lines
+  // without personal data (src/ops.ts); invocation logs stay off, since they record every call.
   "observability": {
-    "enabled": false,
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 },
+    "issues": { "enabled": true },
+  },
+
+  "secrets": {
+    "required": [
+      // Seals personal data in custom fields and keys the ID-number hash (src/pii.ts). Made once
+      // by the deploy workflow; replacing it would make sealed values unreadable.
+      "PII_KEY",
+    ],
   },
 
   // Created in the EU jurisdiction until the pilot partner rules on hosting (docs/DESIGN.md §0);
@@ -37,6 +49,9 @@
     "KURUMSAL_ORIGIN": "https://kurumsal.emanet.dev",
     "MERKEZ_ORIGIN": "https://merkez.emanet.dev",
     "STAFF_EMAIL": "iletisim@emanet.dev",
+    // The population registry's public check of an ID number against a name and birth year
+    // (src/kyc.ts). Empty: no check, staff verify on the video call only.
+    "ID_REGISTRY_URL": "https://tckimlik.nvi.gov.tr/Service/KPSPublic.asmx",
   },
 
   // Every 5 minutes: expire claims, cases and onboarding links; onboarding reminders

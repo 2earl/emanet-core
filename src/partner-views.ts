@@ -111,7 +111,8 @@ export async function caseDocuments(
   const { results } = await db
     .prepare(
       `SELECT id, kind, sha256, exif_time AS taken_at, created_at FROM evidence
-       WHERE claim_id = ? AND status = 'accepted' ORDER BY created_at`,
+       WHERE claim_id = ? AND status = 'accepted'
+         AND file_ref NOT IN (SELECT file_ref FROM erased_files) ORDER BY created_at`,
     )
     .bind(claimId)
     .all<CaseDocument>();
@@ -131,7 +132,8 @@ export async function caseDocument(
   if (!claimId) return fail('not_found');
   const row = await db
     .prepare(
-      `SELECT file_ref, kind FROM evidence WHERE id = ? AND claim_id = ? AND status = 'accepted'`,
+      `SELECT file_ref, kind FROM evidence WHERE id = ? AND claim_id = ? AND status = 'accepted'
+         AND file_ref NOT IN (SELECT file_ref FROM erased_files)`,
     )
     .bind(documentId, claimId)
     .first<{ file_ref: string; kind: CaseDocument['kind'] }>();

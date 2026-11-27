@@ -31,7 +31,15 @@ export async function activePartner(
     T0,
   );
   if (!created.ok) throw new Error(created.error);
-  await setPartnerStatus(db(), created.value.id, 'active', 'staff-1', T0);
+  // As its onboarding leaves it: the agreement accepted and approved.
+  await db()
+    .prepare(
+      'UPDATE partners SET contract_signed_at = ?, contract_version = ?, onboarding_id = ? WHERE id = ?',
+    )
+    .bind(T0, 'test', `ob-${created.value.id}`, created.value.id)
+    .run();
+  const activated = await setPartnerStatus(db(), created.value.id, 'active', 'staff-1', T0);
+  if (!activated.ok) throw new Error(activated.error);
   await setPriceList(db(), created.value.id, prices, 'staff:staff-1', T0, T0);
   return { ...created.value, status: 'active' };
 }
@@ -43,10 +51,20 @@ export async function activeAgent(): Promise<string> {
   await db()
     .prepare(
       `UPDATE agents SET status = 'kyc_pending', legal_name = 'Deneme Saha', city = 'İstanbul',
-         phone = '+905321234567', iban = 'TR330006100519786457841326', iban_verified_at = ?,
+         phone = ?, iban = 'TR330006100519786457841326', iban_verified_at = ?,
+         email = ?, email_verified_at = ?, tckn_hash = ?, birth_year = 1990,
          terms_version = 'test', terms_accepted_at = ?, submitted_at = ? WHERE user_id = ?`,
     )
-    .bind(T0, T0, T0, id)
+    .bind(
+      `+905${String(Math.floor(Math.random() * 1e9)).padStart(9, '0')}`,
+      T0,
+      `${id}@agent.example`,
+      T0,
+      `hash-${id}`,
+      T0,
+      T0,
+      id,
+    )
     .run();
   const activated = await setAgentStatus(db(), id, 'active', 'staff-1', 'kyc passed', T0);
   if (!activated.ok) throw new Error(activated.error);
@@ -85,4 +103,29 @@ export function caseInput(overrides: Partial<CaseInput> = {}): CaseInput {
 export function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: string }): T {
   if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
   return result.value;
+}
+
+/** A T.C. kimlik no with valid check digits (not a real person's). */
+export function randomTckn(): string {
+  const d = [1 + Math.floor(Math.random() * 9)];
+  for (let i = 1; i < 9; i++) d.push(Math.floor(Math.random() * 10));
+  const odd = (d[0] ?? 0) + (d[2] ?? 0) + (d[4] ?? 0) + (d[6] ?? 0) + (d[8] ?? 0);
+  const even = (d[1] ?? 0) + (d[3] ?? 0) + (d[5] ?? 0) + (d[7] ?? 0);
+  d.push((((odd * 7 - even) % 10) + 10) % 10);
+  d.push(d.reduce((sum, n) => sum + n, 0) % 10);
+  return d.join('');
+}
+
+/** A Turkish mobile number nobody else in the tests has. */
+export const randomMobile = (): string =>
+  `+905${String(Math.floor(Math.random() * 1e9)).padStart(9, '0')}`;
+
+/** As if the agent had typed the code mailed to them. */
+export async function verifiedEmail(agentId: string): Promise<string> {
+  const email = `${agentId}@agent.example`;
+  await db()
+    .prepare('UPDATE agents SET email = ?, email_verified_at = ? WHERE user_id = ?')
+    .bind(email, T0, agentId)
+    .run();
+  return email;
 }

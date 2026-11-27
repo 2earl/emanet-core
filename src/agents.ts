@@ -8,6 +8,7 @@
  */
 import { auditStatement } from './audit';
 import type { AgentStatus, EvidenceKind } from './claims';
+import { kycStatement, noRegistry, tcknHash, validTckn, type RegistryCheck } from './kyc';
 import { fail, ok, type Result } from './result';
 
 /** The rules of conduct and agent agreement an agent accepts; bump when they change. */
@@ -23,6 +24,11 @@ export interface AgentProfile {
   phone: string | null;
   iban: string | null;
   iban_verified: boolean;
+  /** The address the agent proved with a code, or null. */
+  email: string | null;
+  /** Whether an ID number is on record (as a keyed hash; the number isn't kept). */
+  id_given: boolean;
+  birth_year: number | null;
   tax_profile: TaxProfile;
   vkn: string | null;
   terms_version: string | null;
@@ -36,7 +42,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
   const row = await db
     .prepare(
       `SELECT status, legal_name, city, phone, iban, iban_verified_at, tax_profile, vkn,
-         terms_version, submitted_at, strikes,
+         terms_version, submitted_at, strikes, email, email_verified_at, tckn_hash, birth_year,
          (SELECT count(*) FROM claims WHERE agent_id = a.user_id AND closed_at IS NULL) AS open_claims
        FROM agents a WHERE user_id = ?`,
     )
@@ -54,6 +60,10 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
       submitted_at: number | null;
       strikes: number;
       open_claims: number;
+      email: string | null;
+      email_verified_at: number | null;
+      tckn_hash: string | null;
+      birth_year: number | null;
     }>();
   if (!row) return fail('not_found');
   return ok({
@@ -63,6 +73,9 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     phone: row.phone,
     iban: row.iban,
     iban_verified: row.iban_verified_at !== null,
+    email: row.email_verified_at !== null ? row.email : null,
+    id_given: row.tckn_hash !== null,
+    birth_year: row.birth_year,
     tax_profile: row.tax_profile,
     vkn: row.vkn,
     terms_version: row.terms_version,
@@ -100,6 +113,9 @@ export interface ProfileInput {
   iban: string;
   taxProfile: TaxProfile;
   vkn?: string | null;
+  /** T.C. kimlik no: needed once; afterwards only when it has to change (before activation). */
+  tckn?: string | null;
+  birthYear?: number | null;
 }
 
 /**
@@ -111,6 +127,7 @@ export async function updateProfile(
   agentId: string,
   input: ProfileInput,
   at: number,
+  registry: RegistryCheck = noRegistry,
 ): Promise<Result<null>> {
   const current = await agentProfile(db, agentId);
   if (!current.ok) return current;
@@ -133,6 +150,50 @@ export async function updateProfile(
     return fail('invalid_vkn');
   }
   const locked = profile.status === 'active';
+
+  // The ID number: required once, checked, and kept only as a keyed hash.
+  const tckn = typeof input.tckn === 'string' ? input.tckn.replace(/\s/g, '') : '';
+  const birthYear = input.birthYear ?? profile.birth_year;
+  let idHash: string | null = null;
+  let registryResult: 'passed' | 'review' | null = null;
+  if (tckn) {
+    if (locked) return fail('profile_locked');
+    if (!validTckn(tckn)) return fail('invalid_tckn');
+    if (
+      birthYear === null ||
+      !Number.isInteger(birthYear) ||
+      birthYear < 1920 ||
+      birthYear > new Date(at * 1000).getUTCFullYear() - 18
+    ) {
+      return fail('invalid_birth_year');
+    }
+    idHash = await tcknHash(tckn);
+    const other = await db
+      .prepare('SELECT 1 AS yes FROM agents WHERE tckn_hash = ? AND user_id != ?')
+      .bind(idHash, agentId)
+      .first();
+    if (other) return fail('tckn_taken');
+    const space = legalName.lastIndexOf(' ');
+    const answer = await registry({
+      tckn,
+      firstName: legalName.slice(0, space),
+      lastName: legalName.slice(space + 1),
+      birthYear,
+    });
+    if (answer === 'no_match') return fail('identity_not_confirmed');
+    registryResult = answer === 'match' ? 'passed' : 'review';
+  } else if (!profile.id_given) {
+    return fail('invalid_tckn');
+  }
+  if (
+    phone !== profile.phone &&
+    (await db
+      .prepare('SELECT 1 AS yes FROM agents WHERE phone = ? AND user_id != ?')
+      .bind(phone, agentId)
+      .first())
+  ) {
+    return fail('phone_taken');
+  }
   if (
     locked &&
     (legalName !== profile.legal_name ||
@@ -143,28 +204,48 @@ export async function updateProfile(
     return fail('profile_locked');
   }
   const ibanChanged = iban !== profile.iban;
-  await db.batch([
-    db
-      .prepare(
-        `UPDATE agents SET legal_name = ?, city = ?, phone = ?, iban = ?, tax_profile = ?, vkn = ?,
-           iban_verified_at = CASE WHEN ? THEN NULL ELSE iban_verified_at END, updated_at = ?
-         WHERE user_id = ?`,
-      )
-      .bind(
-        legalName,
-        city,
-        phone,
-        iban,
-        input.taxProfile,
-        input.taxProfile === 'individual' ? null : vkn,
-        ibanChanged ? 1 : 0,
-        at,
-        agentId,
-      ),
-    auditStatement(db, at, `agent:${agentId}`, 'agent.profile_updated', `agent:${agentId}`, {
-      iban_changed: ibanChanged,
-    }),
-  ]);
+  try {
+    await db.batch([
+      db
+        .prepare(
+          `UPDATE agents SET legal_name = ?, city = ?, phone = ?, iban = ?, tax_profile = ?, vkn = ?,
+             iban_verified_at = CASE WHEN ? THEN NULL ELSE iban_verified_at END,
+             phone_verified_at = CASE WHEN phone IS ? THEN phone_verified_at ELSE NULL END,
+             tckn_hash = coalesce(?, tckn_hash), birth_year = coalesce(?, birth_year), updated_at = ?
+           WHERE user_id = ?`,
+        )
+        .bind(
+          legalName,
+          city,
+          phone,
+          iban,
+          input.taxProfile,
+          input.taxProfile === 'individual' ? null : vkn,
+          ibanChanged ? 1 : 0,
+          phone,
+          idHash,
+          idHash === null ? null : birthYear,
+          at,
+          agentId,
+        ),
+      ...(registryResult === null
+        ? []
+        : [kycStatement(db, agentId, 'id_registry', 'nvi-kps', registryResult, at)]),
+      auditStatement(db, at, `agent:${agentId}`, 'agent.profile_updated', `agent:${agentId}`, {
+        iban_changed: ibanChanged,
+        id_changed: idHash !== null,
+      }),
+    ]);
+  } catch (error) {
+    // Someone else took the number or the phone in the same moment.
+    if (error instanceof Error && /UNIQUE constraint failed: agents\.phone/.test(error.message)) {
+      return fail('phone_taken');
+    }
+    if (error instanceof Error && /UNIQUE constraint failed/.test(error.message)) {
+      return fail('tckn_taken');
+    }
+    throw error;
+  }
   return ok(null);
 }
 
@@ -180,7 +261,10 @@ export async function submitApplication(
   const p = current.value;
   if (p.status !== 'applied') return fail('already_submitted');
   if (termsVersion !== TERMS_VERSION) return fail('terms_changed');
-  if (!p.legal_name || !p.city || !p.phone || !p.iban) return fail('profile_incomplete');
+  if (!p.legal_name || !p.city || !p.phone || !p.iban || !p.id_given) {
+    return fail('profile_incomplete');
+  }
+  if (p.email === null) return fail('email_not_verified');
   await db.batch([
     db
       .prepare(

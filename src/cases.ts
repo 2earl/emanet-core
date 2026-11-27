@@ -11,6 +11,7 @@ import { auditStatement, auditStatementIf, outboxStatement } from './audit';
 import { orphanReviewsStatement } from './claims';
 import { fieldsFor, validateAttributes, visibleAttributes } from './fields';
 import { normalizePlate, normalizeVin } from './normalize';
+import { openAttributes, sealAttributes } from './pii';
 import { checkPriceList, feeFor, type PriceList } from './pricing';
 import { fail, newId, ok, type Result } from './result';
 
@@ -118,6 +119,18 @@ export async function setPartnerStatus(
   at: number,
 ): Promise<Result<null>> {
   if (!['invited', 'active', 'suspended'].includes(status)) return fail('invalid_status');
+  if (status === 'active') {
+    // A company is a partner only through its onboarding: the agreement it accepted and a second
+    // staff member's approval. Nothing else makes one active.
+    const signed = await db
+      .prepare('SELECT contract_signed_at, onboarding_id FROM partners WHERE id = ?')
+      .bind(partnerId)
+      .first<{ contract_signed_at: number | null; onboarding_id: string | null }>();
+    if (!signed) return fail('not_found');
+    if (signed.contract_signed_at === null || signed.onboarding_id === null) {
+      return fail('no_agreement');
+    }
+  }
   const result = await db.batch([
     db
       .prepare('UPDATE partners SET status = ?, updated_at = ? WHERE id = ?')
@@ -327,16 +340,29 @@ async function toView(db: D1Database, row: CaseRow): Promise<CaseView> {
     fieldsFor(db, row.partner_id, 'place'),
     placesOf(db, row.id),
   ]);
+  // Sealed values are opened only after the audience filter: what a partner may not see stays shut.
+  const placeAttributes = await Promise.all(
+    places.map((place) =>
+      openAttributes(
+        visibleAttributes(
+          placeFields,
+          JSON.parse(place.attributes) as Record<string, unknown>,
+          'partner',
+        ),
+      ),
+    ),
+  );
+  const snapshot = JSON.parse(row.vehicle_snapshot) as Snapshot;
   return {
     id: row.id,
     external_ref: row.external_ref,
     status: row.status,
-    vehicle: JSON.parse(row.vehicle_snapshot) as Snapshot,
+    vehicle: { ...snapshot, attributes: await openAttributes(snapshot.attributes) },
     icra_office: row.icra_office,
     icra_file_no: row.icra_file_no,
     serh_date: row.serh_date,
     legal_basis: row.legal_basis,
-    places: places.map((place) => ({
+    places: places.map((place, index) => ({
       id: place.id,
       kind: place.kind,
       address: place.address,
@@ -345,16 +371,14 @@ async function toView(db: D1Database, row: CaseRow): Promise<CaseView> {
       ...(place.lat === null ? {} : { lat: place.lat }),
       ...(place.lng === null ? {} : { lng: place.lng }),
       ...(place.note === null ? {} : { note: place.note }),
-      attributes: visibleAttributes(
-        placeFields,
-        JSON.parse(place.attributes) as Record<string, unknown>,
+      attributes: placeAttributes[index] ?? {},
+    })),
+    attributes: await openAttributes(
+      visibleAttributes(
+        caseFields,
+        JSON.parse(row.attributes) as Record<string, unknown>,
         'partner',
       ),
-    })),
-    attributes: visibleAttributes(
-      caseFields,
-      JSON.parse(row.attributes) as Record<string, unknown>,
-      'partner',
     ),
     fee_kurus: row.fee_kurus,
     last_confirmed_at: row.last_confirmed_at,
@@ -569,27 +593,28 @@ export async function upsertCase(
     .bind(partner.id, input.external_ref)
     .first<CaseRow>();
   const storedSnapshot = existing ? (JSON.parse(existing.vehicle_snapshot) as Snapshot) : null;
+  // What is stored is sealed where its field is personal data: opened to merge, sealed again below.
+  const storedAttributes = existing
+    ? await openAttributes(JSON.parse(existing.attributes) as Record<string, unknown>)
+    : {};
+  const storedVehicleAttributes = await openAttributes(storedSnapshot?.attributes ?? {});
 
-  const attributes = validateAttributes(
-    caseFields,
-    input.attributes,
-    'partner',
-    existing ? (JSON.parse(existing.attributes) as Record<string, unknown>) : {},
-  );
+  const attributes = validateAttributes(caseFields, input.attributes, 'partner', storedAttributes);
   if (!attributes.ok) return attributes;
   const vehicleAttributes = validateAttributes(
     vehicleFields,
     input.vehicle_attributes,
     'partner',
-    storedSnapshot?.attributes ?? {},
+    storedVehicleAttributes,
   );
   if (!vehicleAttributes.ok) return vehicleAttributes;
   const placeAttributes: Record<string, unknown>[] = [];
   for (const place of input.places ?? []) {
     const checkedPlace = validateAttributes(placeFields, place.attributes, 'partner');
     if (!checkedPlace.ok) return checkedPlace;
-    placeAttributes.push(checkedPlace.value);
+    placeAttributes.push(await sealAttributes(placeFields, checkedPlace.value));
   }
+  const sealedAttributes = await sealAttributes(caseFields, attributes.value);
 
   const snapshot: Snapshot = {
     vin,
@@ -598,7 +623,7 @@ export async function upsertCase(
     model: input.model.trim(),
     year: input.year ?? null,
     colour: input.colour?.trim() ?? null,
-    attributes: vehicleAttributes.value,
+    attributes: await sealAttributes(vehicleFields, vehicleAttributes.value),
   };
   const expiresAt = at + partner.reconfirmDays * DAY;
   const statements: D1PreparedStatement[] = [];
@@ -645,7 +670,7 @@ export async function upsertCase(
           input.serh_date,
           input.legal_basis,
           JSON.stringify(snapshot),
-          JSON.stringify(attributes.value),
+          JSON.stringify(sealedAttributes),
           status,
           at,
           expiresAt,
@@ -678,7 +703,7 @@ export async function upsertCase(
           input.serh_date,
           input.legal_basis,
           JSON.stringify(snapshot),
-          JSON.stringify(attributes.value),
+          JSON.stringify(sealedAttributes),
           status,
           feeFor(list, snapshot),
           at,

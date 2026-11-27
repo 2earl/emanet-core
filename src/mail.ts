@@ -348,3 +348,65 @@ export function agreementReadyMail(
         action: { label: 'Open the agreement', url },
       };
 }
+
+/** To an agent: the code that proves this address is theirs. */
+export function emailCodeMail(locale: MailLocale, to: string, code: string): Mail {
+  return locale === 'tr'
+    ? {
+        to,
+        subject: `Emanet Saha doğrulama kodunuz: ${code}`,
+        paragraphs: [
+          'Emanet Saha başvurunuz için e-posta adresinizi doğrulayın.',
+          `Kodunuz: ${code}`,
+          'Kod 15 dakika geçerlidir. Bu isteği siz yapmadıysanız bu e-postayı yok sayabilirsiniz.',
+        ],
+      }
+    : {
+        to,
+        subject: `Your Emanet Saha code: ${code}`,
+        paragraphs: [
+          'Confirm your email address for your Emanet Saha application.',
+          `Your code: ${code}`,
+          'The code is valid for 15 minutes. If you didn’t ask for it, ignore this email.',
+        ],
+      };
+}
+
+/** To a company's operations contact: one of its webhooks was switched off after failing. */
+export function webhookDisabledMail(
+  locale: MailLocale,
+  to: string,
+  company: string,
+  host: string,
+  url: string,
+): Mail {
+  return locale === 'tr'
+    ? {
+        to,
+        subject: `${company}: Emanet webhook’u kapatıldı`,
+        paragraphs: [
+          `${host} adresindeki webhook’unuz art arda başarısız olduğu için kapatıldı. Yeni olaylar bu adrese gönderilmiyor.`,
+          'Adresinizin yanıt verdiğini kontrol edin, ardından webhook’u Emanet Kurumsal’dan yeniden açın. Bu sürede olaylara API üzerinden (GET /api/v1/events) erişebilirsiniz.',
+        ],
+        action: { label: 'Webhook’ları aç', url },
+      }
+    : {
+        to,
+        subject: `${company}: an Emanet webhook was switched off`,
+        paragraphs: [
+          `Your webhook at ${host} failed repeatedly and was switched off. New events are not being sent to it.`,
+          'Check that your endpoint answers, then switch the webhook back on in Emanet Kurumsal. Meanwhile the events are available from the API (GET /api/v1/events).',
+        ],
+        action: { label: 'Open webhooks', url },
+      };
+}
+
+/** To 2earl's staff: something failed and nobody has been told yet. Names of events, never data. */
+export function opsAlertMail(to: string, lines: string[], url: string): Mail {
+  return {
+    to,
+    subject: `Emanet: ${String(lines.length)} kind(s) of error`,
+    paragraphs: ['Errors since the last alert:', ...lines],
+    action: { label: 'Open the System page', url },
+  };
+}

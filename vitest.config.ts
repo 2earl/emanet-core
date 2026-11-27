@@ -9,7 +9,13 @@ export default defineConfig(async () => {
     plugins: [
       cloudflareTest({
         wrangler: { configPath: './wrangler.jsonc' },
-        miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+        miniflare: {
+          // A test key; production's is made by the deploy workflow and never leaves Cloudflare.
+          bindings: {
+            TEST_MIGRATIONS: migrations,
+            PII_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+          },
+        },
       }),
     ],
     test: { setupFiles: ['./test/apply-migrations.ts'] },

@@ -1,5 +1,6 @@
 import { auditStatement } from './audit';
 import { orphanReviewsStatement } from './claims';
+import { eraseAgentEvidenceStatement } from './privacy';
 
 /**
  * What login tells Emanet when an account or an organization is deleted, and what it asks for
@@ -22,13 +23,17 @@ export async function deleteUser(db: D1Database, userId: string, at: number): Pr
     db
       .prepare(
         `UPDATE agents SET status = 'banned', legal_name = NULL, tckn_hash = NULL, city = NULL,
-           iban = NULL, iban_verified_at = NULL, vkn = NULL, phone = NULL, updated_at = ?
+           iban = NULL, iban_verified_at = NULL, vkn = NULL, phone = NULL, phone_verified_at = NULL,
+           email = NULL, email_verified_at = NULL, birth_year = NULL, updated_at = ?
          WHERE user_id = ?`,
       )
       .bind(at, userId),
     db.prepare('DELETE FROM kyc_checks WHERE agent_id = ?').bind(userId),
     db.prepare('DELETE FROM cooldowns WHERE agent_id = ?').bind(userId),
+    db.prepare('DELETE FROM agent_email_codes WHERE agent_id = ?').bind(userId),
     orphanReviewsStatement(db, at),
+    // After the claims are closed above: photos of every claim that delivered nothing.
+    eraseAgentEvidenceStatement(db, userId, at),
     auditStatement(db, at, 'system', 'account.deleted', `agent:${userId}`),
   ]);
 }
@@ -37,7 +42,7 @@ export async function deleteUser(db: D1Database, userId: string, at: number): Pr
 export async function exportUser(db: D1Database, userId: string): Promise<Record<string, unknown>> {
   const agent = await db
     .prepare(
-      `SELECT status, legal_name, city, phone, iban, tax_profile, vkn, terms_version, terms_accepted_at,
+      `SELECT status, legal_name, city, phone, email, birth_year, iban, tax_profile, vkn, terms_version, terms_accepted_at,
          created_at FROM agents WHERE user_id = ?`,
     )
     .bind(userId)
