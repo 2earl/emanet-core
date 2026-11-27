@@ -16,6 +16,28 @@ export function auditStatement(
     .bind(newId(), at, actor, action, subject, JSON.stringify(detail));
 }
 
+/**
+ * An audit row written only if `condition` (an SQL expression over `binds`) holds when the batch
+ * runs: for a change guarded by its own WHERE, so a refused change leaves no record of happening.
+ */
+export function auditStatementIf(
+  db: D1Database,
+  at: number,
+  actor: string,
+  action: string,
+  subject: string,
+  detail: Record<string, unknown>,
+  condition: string,
+  ...binds: unknown[]
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO audit_events (id, at, actor, action, subject, detail)
+       SELECT ?, ?, ?, ?, ?, ? WHERE ${condition}`,
+    )
+    .bind(newId(), at, actor, action, subject, JSON.stringify(detail), ...binds);
+}
+
 /** An event for a partner's webhooks and polling, batched with the change it reports. */
 export function outboxStatement(
   db: D1Database,

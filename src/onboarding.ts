@@ -10,7 +10,7 @@
  *
  * The link's secret is only in the email: the database keeps its SHA-256. Every step is audited.
  */
-import { auditStatement } from './audit';
+import { auditStatement, auditStatementIf } from './audit';
 import { partnerByOrg, type PartnerKind } from './cases';
 import {
   renderContract,
@@ -381,14 +381,45 @@ export async function listOnboardings(
 export async function onboardingForStaff(
   db: D1Database,
   id: string,
-): Promise<Result<Onboarding & { note: string | null; contract_text: string | null }>> {
+): Promise<
+  Result<
+    Onboarding & {
+      note: string | null;
+      contract_text: string | null;
+      acceptances: Acceptance[];
+    }
+  >
+> {
   const row = await rowById(db, id);
   if (!row) return fail('not_found');
-  const text = await db
-    .prepare('SELECT contract_text FROM onboardings WHERE id = ?')
-    .bind(id)
-    .first<{ contract_text: string | null }>();
-  return ok({ ...(await view(db, row)), contract_text: text?.contract_text ?? null });
+  const [text, acceptances] = await Promise.all([
+    db
+      .prepare('SELECT contract_text FROM onboardings WHERE id = ?')
+      .bind(id)
+      .first<{ contract_text: string | null }>(),
+    db
+      .prepare(
+        `SELECT contract_version, contract_sha256, signer_name, signer_title, signer_ip, signed_at
+         FROM onboarding_acceptances WHERE onboarding_id = ? ORDER BY signed_at`,
+      )
+      .bind(id)
+      .all<Acceptance>(),
+  ]);
+  return ok({
+    ...(await view(db, row)),
+    contract_text: text?.contract_text ?? null,
+    acceptances: acceptances.results,
+  });
+}
+
+/** One acceptance of the agreement, kept even after staff sent the onboarding back. */
+export interface Acceptance {
+  contract_version: string;
+  contract_sha256: string;
+  signer_name: string;
+  signer_title: string;
+  signer_ip: string | null;
+  signed_at: number;
 }
 
 export async function cancel(
@@ -906,10 +937,43 @@ export async function sign(
         at,
         id,
       ),
-    auditStatement(db, at, `user:${userId}`, 'onboarding.signed', `onboarding:${id}`, {
-      version: contract.value.version,
-      sha256: contract.value.sha256,
-    }),
+    // Kept for good, even if staff later send the onboarding back (migration 0005).
+    db
+      .prepare(
+        `INSERT INTO onboarding_acceptances (id, onboarding_id, contract_version, contract_sha256,
+           contract_text, signed_by, signer_name, signer_title, signer_ip, signed_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (SELECT 1 FROM onboardings WHERE id = ? AND status = 'signed' AND signed_at = ?
+           AND signed_by = ? AND contract_sha256 = ?)`,
+      )
+      .bind(
+        newId(),
+        id,
+        contract.value.version,
+        contract.value.sha256,
+        contract.value.text,
+        userId,
+        name,
+        title,
+        input.ip,
+        at,
+        id,
+        at,
+        userId,
+        contract.value.sha256,
+      ),
+    auditStatementIf(
+      db,
+      at,
+      `user:${userId}`,
+      'onboarding.signed',
+      `onboarding:${id}`,
+      { version: contract.value.version, sha256: contract.value.sha256 },
+      `EXISTS (SELECT 1 FROM onboarding_acceptances WHERE onboarding_id = ? AND signed_at = ? AND signed_by = ?)`,
+      id,
+      at,
+      userId,
+    ),
   ]);
   if (result[0]?.meta.changes !== 1) return fail('not_editable');
   const company = (JSON.parse(row.value.details) as Details).legalName;
