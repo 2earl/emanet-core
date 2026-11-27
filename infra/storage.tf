@@ -76,3 +76,15 @@ resource "cloudflare_r2_bucket" "evidence" {
     prevent_destroy = true
   }
 }
+
+# Companies' onboarding documents: signed contracts, signature circulars (imza sirküleri), tax
+# certificates. Written by Emanet Kurumsal, read by Emanet Merkez.
+resource "cloudflare_r2_bucket" "documents" {
+  account_id   = var.account_id
+  name         = "emanet-documents"
+  jurisdiction = "eu"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
