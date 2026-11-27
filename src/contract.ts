@@ -9,7 +9,7 @@
  * and a SHA-256 of exactly what was shown.
  */
 
-export const CONTRACT_VERSION = '2026-11-27-draft';
+export const CONTRACT_VERSION = '2026-11-28-draft';
 
 /** 2earl's Turkish company, as the agreement and invoices name it. */
 export interface Provider {
@@ -30,7 +30,7 @@ export const PROVIDER_PLACEHOLDER: Provider = {
   vkn: '[Vergi kimlik numarası]',
   mersis: '[MERSİS numarası]',
   kep: '[KEP adresi]',
-  email: 'legal@2earl.com',
+  email: 'iletisim@emanet.dev',
 };
 
 export interface ContractParty {
@@ -78,7 +78,7 @@ export const ARTICLES: Section[] = [
   {
     title: 'Madde 2 – Tanımlar',
     paragraphs: [
-      '"Platform": Hizmet Sağlayıcı tarafından işletilen Emanet hizmetini, Emanet Kurumsal arayüzünü (emanet-kurumsal.2earl.com), uygulama programlama arayüzünü (API) ve bildirim (webhook) altyapısını ifade eder.',
+      '"Platform": Hizmet Sağlayıcı tarafından işletilen Emanet hizmetini, Emanet Kurumsal arayüzünü (kurumsal.emanet.dev), uygulama programlama arayüzünü (API) ve bildirim (webhook) altyapısını ifade eder.',
       '"Dosya": Müşterinin Platforma kaydettiği, hakkında yetkili icra dairesince yakalama şerhi konulmuş veya yakalama kararı verilmiş bir aracı ve buna ilişkin icra dosyası bilgilerini ifade eder.',
       '"Saha Ajanı": Kimliği ve banka hesabı Hizmet Sağlayıcı tarafından doğrulanmış, Platform üzerinden Dosyalara konu araçları arayan ve gördüğünde kolluk kuvvetlerine bildiren bağımsız kişiyi ifade eder.',
       '"Teslim": Dosyaya konu aracın kolluk kuvvetlerince yakalanarak bir yediemin otoparkına teslim edildiğinin, yediemin teslim tutanağı ve Platform kayıtlarıyla Hizmet Sağlayıcı tarafından teyit edilmesini ifade eder.',
@@ -238,7 +238,7 @@ export const ANNEXES: Section[] = [
       'Şifreleme: aktarımda TLS 1.2 ve üzeri; saklamada sağlayıcı düzeyinde şifreleme. API anahtarları ve oturumlar yalnızca özet (HMAC) olarak saklanır.',
       'Kayıt: Dosya, adres görüntüleme, teslim, faturalama ve ödeme işlemleri değiştirilemez denetim kayıtlarıyla tutulur; muhasebe kayıtları çift taraflı ve değiştirilemezdir.',
       'Bankalar için: Hizmet Sağlayıcı, Bankaların Destek Hizmeti Almalarına İlişkin Yönetmelik kapsamında Müşterinin ve Bankacılık Düzenleme ve Denetleme Kurumu’nun denetim ve bilgi talebi haklarını, iş sürekliliği ve çıkış planı yükümlülüklerini kabul eder; Müşterinin talebi halinde gerekli beyan ve taahhütnameleri verir.',
-      'Güvenlik açıkları: legal@2earl.com adresine bildirilir; kritik açıklar en geç 7 gün içinde giderilir.',
+      'Güvenlik açıkları: iletisim@emanet.dev adresine bildirilir; kritik açıklar en geç 7 gün içinde giderilir.',
     ],
   },
   {

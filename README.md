@@ -6,9 +6,9 @@ repository and at its own address:
 
 | App | Repository | Address | Binds to |
 | --- | --- | --- | --- |
-| Emanet Kurumsal: creditors (banks, asset management companies) | 2earl/emanet-kurumsal | emanet-kurumsal.2earl.com | `PartnerApi` |
-| Emanet Saha: field agents (web and mobile) | 2earl/emanet-saha | emanet-saha.2earl.com | `FieldApi` |
-| Emanet Merkez: 2earl staff | 2earl/emanet-merkez | emanet-merkez.2earl.com | `ControlApi` |
+| Emanet Kurumsal: creditors (banks, asset management companies) | 2earl/emanet-kurumsal | kurumsal.emanet.dev | `PartnerApi` |
+| Emanet Saha: field agents (web and mobile) | 2earl/emanet-saha | saha.emanet.dev | `FieldApi` |
+| Emanet Merkez: 2earl staff | 2earl/emanet-merkez | merkez.emanet.dev | `ControlApi` |
 
 The core itself has no address. Each app reaches only its own entrypoint over a Cloudflare Service
 Binding, so the agents' app cannot, for example, confirm a delivery or read a creditor's cases.

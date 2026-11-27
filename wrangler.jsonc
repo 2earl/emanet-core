@@ -28,15 +28,15 @@
     },
   ],
 
-  // Onboarding email to invited companies and to staff (docs/DESIGN.md §5, Onboarding). The
-  // domain is already set up for Email Service by login.2earl.com.
-  "send_email": [{ "name": "MAILER", "allowed_sender_addresses": ["noreply@2earl.com"] }],
+  // All of Emanet's email (docs/DESIGN.md §5, Onboarding), from its own domain: emanet.dev is set
+  // up for Cloudflare Email Service sending. Replies go to iletisim@emanet.dev.
+  "send_email": [{ "name": "MAILER", "allowed_sender_addresses": ["noreply@emanet.dev"] }],
 
   // Where onboarding links point, and where staff are told of a signed agreement.
   "vars": {
-    "KURUMSAL_ORIGIN": "https://emanet-kurumsal.2earl.com",
-    "MERKEZ_ORIGIN": "https://emanet-merkez.2earl.com",
-    "STAFF_EMAIL": "legal@2earl.com",
+    "KURUMSAL_ORIGIN": "https://kurumsal.emanet.dev",
+    "MERKEZ_ORIGIN": "https://merkez.emanet.dev",
+    "STAFF_EMAIL": "iletisim@emanet.dev",
   },
 
   // Every 5 minutes: expire claims, cases and onboarding links; onboarding reminders

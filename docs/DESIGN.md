@@ -72,9 +72,9 @@ Constraints from Turkish law and practice:
 
 | App | Turkish | English | Address (proposal) |
 | --- | --- | --- | --- |
-| X, creditors | Emanet Kurumsal | Emanet for Creditors | emanet-kurumsal.2earl.com |
-| Z, agents | Emanet Saha | Emanet Field | emanet-saha.2earl.com |
-| Y, admins | Emanet Merkez | Emanet Control | emanet-merkez.2earl.com (staff only) |
+| X, creditors | Emanet Kurumsal | Emanet for Creditors | kurumsal.emanet.dev |
+| Z, agents | Emanet Saha | Emanet Field | saha.emanet.dev |
+| Y, admins | Emanet Merkez | Emanet Control | merkez.emanet.dev (staff only) |
 
 Known risk: people may confuse it with *adli emanet*, the state's custody of evidence, and a
 debtor may take an agent for an official. Mitigations:
@@ -133,15 +133,16 @@ Edge cases the design handles:
 
 ## 3. Architecture
 
-**Each app has its own repository and its own address under 2earl.com.** The data and rules live
+**Each app has its own repository and its own address under emanet.dev.** The data and rules live
 once, in a core service that the three apps call.
 
 | Repository | Address | What it is |
 | --- | --- | --- |
 | 2earl/emanet-core | none (Service Bindings only) | D1 database, migrations, rules, ledger, crons |
-| 2earl/emanet-kurumsal | emanet-kurumsal.2earl.com | Creditors' web app and `/api/v1`, webhooks |
-| 2earl/emanet-saha | emanet-saha.2earl.com | Agents' PWA (later a native shell for NFC) |
-| 2earl/emanet-merkez | emanet-merkez.2earl.com | Staff console |
+| 2earl/emanet-web | emanet.dev | Public site: front page for companies and agents, legal pages (KVKK) |
+| 2earl/emanet-kurumsal | kurumsal.emanet.dev | Creditors' web app and `/api/v1`, webhooks |
+| 2earl/emanet-saha | saha.emanet.dev | Agents' PWA (later a native shell for NFC) |
+| 2earl/emanet-merkez | merkez.emanet.dev | Staff console |
 
 - **Why a core service.** Three apps writing the same tables would each need the same invariants:
   one open claim per vehicle, balanced journal entries, the no-oracle rule. Logic copied three
@@ -149,10 +150,14 @@ once, in a core service that the three apps call.
 - **Least privilege.** The core exposes three RPC entrypoints (`PartnerApi`, `FieldApi`,
   `ControlApi`), and each app is bound to its own only. The agents' app cannot call
   `confirmDelivery`; the creditors' app cannot list hunts.
-- **Addresses.** One level under 2earl.com: Cloudflare's free certificate covers `*.2earl.com`
-  but not deeper names. [Muhtemel] The hosts are Turkish to match the product names; every app
-  serves both languages. All three are `noindex`, like login and mcp; only 2earl.com is for
-  search engines.
+- **Addresses.** Emanet has its own domain, emanet.dev: the public site at the apex, each app one
+  level under it (Cloudflare's free certificate covers `*.emanet.dev`). The hosts are Turkish to
+  match the product names; every app serves both languages. The three apps are `noindex`; only
+  emanet.dev is for search engines. Sign-in stays at login.2earl.com.
+- **Turkish rules.** Emanet is run under Turkish law: KVKK for personal data, the privacy notice,
+  terms and cookie policy on emanet.dev are written for it (2earl/emanet-web), separately from
+  2earl.com's. Email goes from noreply@emanet.dev; the one address for people is
+  iletisim@emanet.dev.
 - **Identity**: login.2earl.com, already in place.
   - Creditor companies are **login organizations**: created by global admins, joined by email
     invitation (phase 11). QR codes and invite links are the same invitation, encoded differently.

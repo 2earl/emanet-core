@@ -6,27 +6,33 @@ variable "account_id" {
 }
 
 variable "zone_name" {
-  description = "The zone the Emanet apps are served under, one level deep (emanet-<app>.2earl.com)."
+  description = "Emanet's own zone: the public site at the apex, each app one level deep (<app>.emanet.dev)."
   type        = string
-  default     = "2earl.com"
+  default     = "emanet.dev"
 }
 
 # An app's custom domain can only attach once its Worker exists: set each to true after the app's
 # first deploy (README, First deployment).
 variable "kurumsal_live" {
-  description = "Attach emanet-kurumsal.2earl.com to the emanet-kurumsal Worker."
+  description = "Attach kurumsal.emanet.dev to the emanet-kurumsal Worker."
   type        = bool
   default     = true
 }
 
 variable "saha_live" {
-  description = "Attach emanet-saha.2earl.com to the emanet-saha Worker."
+  description = "Attach saha.emanet.dev to the emanet-saha Worker."
   type        = bool
   default     = true
 }
 
 variable "merkez_live" {
-  description = "Attach emanet-merkez.2earl.com to the emanet-merkez Worker."
+  description = "Attach merkez.emanet.dev to the emanet-merkez Worker."
   type        = bool
   default     = true
+}
+
+variable "web_live" {
+  description = "Attach emanet.dev to the emanet-web Worker (2earl/emanet-web), after its first deploy."
+  type        = bool
+  default     = false
 }

@@ -6,13 +6,15 @@ workspace. Rationale: [docs/DESIGN.md §3](../docs/DESIGN.md).
 | File | Manages |
 |---|---|
 | `storage.tf` | D1 `emanet` (core), `emanet-kurumsal`, `emanet-merkez` and `emanet-saha`; R2 buckets `emanet-evidence` (agents' photos) and `emanet-documents` (companies' onboarding documents). EU jurisdiction, protected from destroy |
-| `worker.tf` | Custom domains `emanet-kurumsal`, `emanet-saha`, `emanet-merkez` `.2earl.com`, each switched on by a variable once its Worker exists |
+| `worker.tf` | Custom domains `kurumsal`, `saha`, `merkez` `.emanet.dev` and the apex `emanet.dev` (2earl/emanet-web), each switched on by a variable once its Worker exists |
+| `zone.tf` | emanet.dev zone settings: strict TLS, HSTS, no 0-RTT, Bot Fight Mode off (API clients are servers) |
 
 Not managed here: the 2earl.com zone and its settings (2earl/login `infra/`), Worker code, Worker
 secrets and D1 migrations (each repo's `.github/workflows/deploy.yml`).
 
-The Cloudflare token needs: Account D1 edit, Account R2 Storage edit, and on the 2earl.com zone
-Zone read and Workers Routes edit.
+The Cloudflare token needs: Account D1 edit, Account R2 Storage edit, Account Workers Scripts read,
+and on the emanet.dev zone: Zone read, Zone Settings edit, Bot Management edit and Workers Routes
+edit.
 
 ## How changes are applied
 
