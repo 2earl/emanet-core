@@ -28,7 +28,19 @@
     },
   ],
 
-  // Every 5 minutes: expire claims and cases (docs/DESIGN.md §5).
+  // Onboarding email to invited companies and to staff (docs/DESIGN.md §5, Onboarding). The
+  // domain is already set up for Email Service by login.2earl.com.
+  "send_email": [{ "name": "MAILER", "allowed_sender_addresses": ["noreply@2earl.com"] }],
+
+  // Where onboarding links point, and where staff are told of a signed agreement.
+  "vars": {
+    "KURUMSAL_ORIGIN": "https://emanet-kurumsal.2earl.com",
+    "MERKEZ_ORIGIN": "https://emanet-merkez.2earl.com",
+    "STAFF_EMAIL": "legal@2earl.com",
+  },
+
+  // Every 5 minutes: expire claims, cases and onboarding links; onboarding reminders
+  // (docs/DESIGN.md §5).
   "triggers": {
     "crons": ["*/5 * * * *"],
   },

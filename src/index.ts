@@ -77,6 +77,31 @@ import {
   uninvoiced,
   updatePartner,
 } from './control';
+import { mailer, type Send } from './mail';
+import {
+  addDocument,
+  approve,
+  cancel,
+  claim,
+  contractFor,
+  invitationByToken,
+  invite,
+  linkOrganization,
+  listOnboardings,
+  mine,
+  onboardingForStaff,
+  onboardingForUser,
+  reject,
+  remindAndExpire,
+  reopen,
+  resend,
+  saveDetails,
+  sign,
+  type DocumentKind,
+  type Invitation,
+  type OnboardingStatus,
+  type Origins,
+} from './onboarding';
 import { checkPayoutRule } from './pricing';
 import { fail, now, ok, type Result } from './result';
 import { SETTING_DEFAULTS, readSettings, writeSetting, type SettingKey } from './settings';
@@ -89,7 +114,80 @@ async function activePartner(db: D1Database, orgId: string): Promise<Result<Part
 }
 
 /** For emanet-partners. `orgId` is the login organization the signed-in person acts for. */
+function origins(env: Env): Origins {
+  return { kurumsal: env.KURUMSAL_ORIGIN, merkez: env.MERKEZ_ORIGIN, staffEmail: env.STAFF_EMAIL };
+}
+
 export class PartnerApi extends WorkerEntrypoint<Env> {
+  /** Tests replace this; everything else sends through the MAILER binding. */
+  protected send: Send = mailer(this.env);
+
+  // ---- Onboarding: the invited company, before it is a partner (docs/DESIGN.md §5) ----
+
+  async onboardingInvitation(token: string) {
+    return invitationByToken(this.env.DB, token, now());
+  }
+
+  async claimOnboarding(token: string, userId: string) {
+    return claim(this.env.DB, token, userId, now());
+  }
+
+  async myOnboardings(userId: string) {
+    return mine(this.env.DB, userId);
+  }
+
+  async onboarding(onboardingId: string, userId: string) {
+    return onboardingForUser(this.env.DB, onboardingId, userId, now());
+  }
+
+  async linkOnboardingOrganization(onboardingId: string, userId: string, orgId: string) {
+    return linkOrganization(this.env.DB, onboardingId, userId, orgId, now());
+  }
+
+  async saveOnboardingDetails(
+    onboardingId: string,
+    userId: string,
+    details: Record<string, unknown>,
+  ) {
+    return saveDetails(this.env.DB, onboardingId, userId, details, now());
+  }
+
+  async addOnboardingDocument(
+    onboardingId: string,
+    userId: string,
+    document: {
+      kind: DocumentKind;
+      file_ref: string;
+      sha256: string;
+      file_name: string;
+      content_type: string;
+      size: number;
+    },
+  ) {
+    return addDocument(this.env.DB, onboardingId, userId, document, now());
+  }
+
+  async onboardingContract(onboardingId: string, userId: string) {
+    return contractFor(this.env.DB, onboardingId, userId, now());
+  }
+
+  async signOnboarding(
+    onboardingId: string,
+    userId: string,
+    input: {
+      version: string;
+      sha256: string;
+      name: string;
+      title: string;
+      ip: string | null;
+      authorised: boolean;
+    },
+  ) {
+    return sign(this.env.DB, this.send, origins(this.env), onboardingId, userId, input, now());
+  }
+
+  // ---- Partners ----
+
   async partner(orgId: string) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     return partner ? ok(partner) : fail('not_a_partner');
@@ -278,6 +376,44 @@ export class FieldApi extends WorkerEntrypoint<Env> {
 
 /** For emanet-control. `staffId` is a login staff member; the app has checked the role. */
 export class ControlApi extends WorkerEntrypoint<Env> {
+  protected send: Send = mailer(this.env);
+
+  // ---- Onboarding (docs/DESIGN.md §5) ----
+
+  async inviteCompany(staffId: string, input: Invitation) {
+    return invite(this.env.DB, this.send, origins(this.env), staffId, input, now());
+  }
+
+  async onboardings(status: OnboardingStatus | null = null) {
+    return listOnboardings(this.env.DB, status);
+  }
+
+  async onboarding(onboardingId: string) {
+    return onboardingForStaff(this.env.DB, onboardingId);
+  }
+
+  async resendInvitation(staffId: string, onboardingId: string) {
+    return resend(this.env.DB, this.send, origins(this.env), staffId, onboardingId, now());
+  }
+
+  async cancelOnboarding(staffId: string, onboardingId: string, reason: string) {
+    return cancel(this.env.DB, staffId, onboardingId, reason, now());
+  }
+
+  async approveOnboarding(staffId: string, onboardingId: string) {
+    return approve(this.env.DB, this.send, origins(this.env), staffId, onboardingId, now());
+  }
+
+  async returnOnboarding(staffId: string, onboardingId: string, reason: string) {
+    return reopen(this.env.DB, this.send, origins(this.env), staffId, onboardingId, reason, now());
+  }
+
+  async rejectOnboarding(staffId: string, onboardingId: string, reason: string) {
+    return reject(this.env.DB, this.send, staffId, onboardingId, reason, now());
+  }
+
+  // ---- Partners ----
+
   async createPartner(staffId: string, input: NewPartner) {
     return createPartner(this.env.DB, input, staffId, now());
   }
@@ -468,6 +604,7 @@ export default {
       (async () => {
         await expireClaims(env.DB, at);
         await expireCases(env.DB, at);
+        await remindAndExpire(env.DB, mailer(env), origins(env), at);
       })(),
     );
   },
