@@ -103,6 +103,14 @@ import {
   type OnboardingStatus,
   type Origins,
 } from './onboarding';
+import {
+  caseDocument,
+  caseDocuments,
+  invoice as partnerInvoice,
+  invoices as partnerInvoices,
+  report,
+  timeline,
+} from './partner-views';
 import { checkPayoutRule } from './pricing';
 import { providerForStaff, setProvider } from './provider';
 import { fail, now, ok, type Result } from './result';
@@ -211,6 +219,52 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
     return getCase(this.env.DB, partner.id, caseId);
+  }
+
+  /** States and times of a case; never who on 2earl's side. */
+  async caseTimeline(orgId: string, caseId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return timeline(this.env.DB, partner, caseId);
+  }
+
+  /** The custody documents of a delivered case. */
+  async caseDocuments(orgId: string, caseId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return caseDocuments(this.env.DB, partner, caseId);
+  }
+
+  /** Where one of those documents is stored; the look is recorded. */
+  async caseDocument(orgId: string, actor: string, caseId: string, documentId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return caseDocument(
+      this.env.DB,
+      partner,
+      `partner:${partner.id}/${actor}`,
+      caseId,
+      documentId,
+      now(),
+    );
+  }
+
+  async invoices(orgId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return partnerInvoices(this.env.DB, partner);
+  }
+
+  async invoice(orgId: string, invoiceId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return partnerInvoice(this.env.DB, partner, invoiceId);
+  }
+
+  async report(orgId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return report(this.env.DB, partner, now());
   }
 
   async listCases(
