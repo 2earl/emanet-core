@@ -21,13 +21,16 @@ export interface PartnerRow {
   created_at: number;
   active_cases: number;
   delivered_cases: number;
+  contact_email: string | null;
+  billing_email: string | null;
+  mail_notices: number;
 }
 
 export async function listPartners(db: D1Database): Promise<PartnerRow[]> {
   const { results } = await db
     .prepare(
       `SELECT p.id, p.org_id, p.kind, p.legal_name, p.vkn, p.tax_office, p.kep_address, p.e_invoice,
-         p.status, p.reconfirm_days, p.created_at,
+         p.status, p.reconfirm_days, p.created_at, p.contact_email, p.billing_email, p.mail_notices,
          (SELECT count(*) FROM cases c WHERE c.partner_id = p.id AND c.status IN ('active', 'pending_identity')) AS active_cases,
          (SELECT count(*) FROM cases c WHERE c.partner_id = p.id AND c.status = 'delivered') AS delivered_cases
        FROM partners p ORDER BY p.legal_name`,

@@ -111,6 +111,7 @@ import {
   report,
   timeline,
 } from './partner-views';
+import { sendNotices } from './notices';
 import { checkPayoutRule } from './pricing';
 import { provider, providerForStaff, setProvider } from './provider';
 import { fail, now, ok, type Result } from './result';
@@ -455,7 +456,30 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   async setProvider(staffId: string, input: Record<string, unknown>) {
-    return setProvider(this.env.DB, staffId, input, now());
+    return setProvider(this.env.DB, staffId, input, now(), {
+      send: this.send,
+      kurumsal: this.env.KURUMSAL_ORIGIN,
+    });
+  }
+
+  /** Whether a partner's operations contact gets delivery and expiry emails. */
+  async setPartnerNotices(staffId: string, partnerId: string, on: boolean) {
+    const at = now();
+    const result = await this.env.DB.batch([
+      this.env.DB.prepare('UPDATE partners SET mail_notices = ?, updated_at = ? WHERE id = ?').bind(
+        on ? 1 : 0,
+        at,
+        partnerId,
+      ),
+      auditStatement(
+        this.env.DB,
+        at,
+        `staff:${staffId}`,
+        on ? 'partner.notices_on' : 'partner.notices_off',
+        `partner:${partnerId}`,
+      ),
+    ]);
+    return result[0]?.meta.changes === 1 ? ok(null) : fail('not_found');
   }
 
   async inviteCompany(staffId: string, input: Invitation) {
@@ -693,6 +717,7 @@ export default {
         await expireClaims(env.DB, at);
         await expireCases(env.DB, at);
         await remindAndExpire(env.DB, mailer(env), origins(env), at);
+        await sendNotices(env.DB, mailer(env), env.KURUMSAL_ORIGIN, at);
       })(),
     );
   },

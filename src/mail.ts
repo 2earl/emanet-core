@@ -234,3 +234,117 @@ export function returnedMail(
         action: { label: 'Open the application', url },
       };
 }
+
+const turkeyDay = (unix: number, locale: MailLocale) =>
+  new Date(unix * 1000).toLocaleDateString(locale === 'tr' ? 'tr-TR' : 'en-GB', {
+    timeZone: 'Europe/Istanbul',
+    day: 'numeric',
+    month: 'long',
+  });
+
+/** To a partner's operations contact: vehicles that reached custody. */
+export function deliveredMail(
+  locale: MailLocale,
+  to: string,
+  company: string,
+  vehicles: { plate: string; ref: string; url: string }[],
+): Mail {
+  const one = vehicles.length === 1;
+  const lines = vehicles.slice(0, 20).map((v) => `${v.plate} · ${v.ref} · ${v.url}`);
+  const more = vehicles.length > 20 ? vehicles.length - 20 : 0;
+  return locale === 'tr'
+    ? {
+        to,
+        subject: one
+          ? `${company}: ${vehicles[0]?.plate ?? ''} yedieminde`
+          : `${company}: ${String(vehicles.length)} araç yedieminde`,
+        paragraphs: [
+          one
+            ? 'Aşağıdaki araç kolluk tarafından yakalanarak yediemine teslim edildi. Teslim belgeleri dosyada.'
+            : `${String(vehicles.length)} araç kolluk tarafından yakalanarak yediemine teslim edildi. Teslim belgeleri dosyalarda.`,
+          ...lines,
+          ...(more ? [`ve ${String(more)} araç daha.`] : []),
+        ],
+        after: [
+          'Bu bildirimleri kurumunuzun operasyon iletişim adresi olarak alıyorsunuz. Kapatmak için bu e-postayı yanıtlayın.',
+        ],
+      }
+    : {
+        to,
+        subject: one
+          ? `${company}: ${vehicles[0]?.plate ?? ''} is in custody`
+          : `${company}: ${String(vehicles.length)} vehicles in custody`,
+        paragraphs: [
+          one
+            ? 'The police seized this vehicle and delivered it to a custodian car park. The documents are on the case.'
+            : `The police seized ${String(vehicles.length)} vehicles and delivered them to a custodian car park. The documents are on the cases.`,
+          ...lines,
+          ...(more ? [`and ${String(more)} more.`] : []),
+        ],
+        after: [
+          'You get these notices as your company’s operations contact. Reply to this email to turn them off.',
+        ],
+      };
+}
+
+/** To a partner's operations contact: cases that expire soon unless confirmed. */
+export function expiringMail(
+  locale: MailLocale,
+  to: string,
+  company: string,
+  count: number,
+  first: number,
+  url: string,
+): Mail {
+  return locale === 'tr'
+    ? {
+        to,
+        subject: `${company}: ${String(count)} dosyanın süresi doluyor`,
+        paragraphs: [
+          `${String(count)} dosyanın süresi üç gün içinde doluyor; ilki ${turkeyDay(first, locale)}. Süresi dolan dosyada saha görevlileri aramayı bırakır.`,
+          'Yakalama şerhi hâlâ geçerli olanları Genel bakış sayfasında tek seferde onaylayabilirsiniz.',
+        ],
+        action: { label: 'Dosyaları onayla', url },
+        after: [
+          'Bu bildirimleri kurumunuzun operasyon iletişim adresi olarak alıyorsunuz. Kapatmak için bu e-postayı yanıtlayın.',
+        ],
+      }
+    : {
+        to,
+        subject: `${company}: ${String(count)} cases are about to expire`,
+        paragraphs: [
+          `${String(count)} cases expire within three days, the first on ${turkeyDay(first, locale)}. Agents stop looking when a case expires.`,
+          'Confirm the ones whose seizure order still stands, all at once, on the Overview page.',
+        ],
+        action: { label: 'Confirm cases', url },
+        after: [
+          'You get these notices as your company’s operations contact. Reply to this email to turn them off.',
+        ],
+      };
+}
+
+/** To a company waiting on the agreement: 2earl's details are in, it can be accepted now. */
+export function agreementReadyMail(
+  locale: MailLocale,
+  to: string,
+  company: string,
+  url: string,
+): Mail {
+  return locale === 'tr'
+    ? {
+        to,
+        subject: `${company}: Emanet sözleşmesi onaya hazır`,
+        paragraphs: [
+          '2earl sözleşmedeki kendi bilgilerini tamamladı. Emanet Hizmet Sözleşmesi’ni artık okuyup onaylayabilirsiniz.',
+        ],
+        action: { label: 'Sözleşmeye git', url },
+      }
+    : {
+        to,
+        subject: `${company}: the Emanet agreement is ready to accept`,
+        paragraphs: [
+          '2earl has completed its own details in the agreement. You can read and accept the Emanet service agreement now.',
+        ],
+        action: { label: 'Open the agreement', url },
+      };
+}
