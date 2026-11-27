@@ -22,7 +22,7 @@ variable "kurumsal_live" {
 variable "saha_live" {
   description = "Attach emanet-saha.2earl.com to the emanet-saha Worker."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "merkez_live" {
