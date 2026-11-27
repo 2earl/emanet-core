@@ -103,6 +103,7 @@ import {
   type Origins,
 } from './onboarding';
 import { checkPayoutRule } from './pricing';
+import { providerForStaff, setProvider } from './provider';
 import { fail, now, ok, type Result } from './result';
 import { SETTING_DEFAULTS, readSettings, writeSetting, type SettingKey } from './settings';
 
@@ -379,6 +380,15 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   protected send: Send = mailer(this.env);
 
   // ---- Onboarding (docs/DESIGN.md §5) ----
+
+  /** 2earl's own company details, as the agreement names it. */
+  async provider() {
+    return providerForStaff(this.env.DB);
+  }
+
+  async setProvider(staffId: string, input: Record<string, unknown>) {
+    return setProvider(this.env.DB, staffId, input, now());
+  }
 
   async inviteCompany(staffId: string, input: Invitation) {
     return invite(this.env.DB, this.send, origins(this.env), staffId, input, now());

@@ -1,5 +1,5 @@
 import { exports } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { partnerByOrg } from '../src/cases';
 import { renderContract } from '../src/contract';
 import type { ControlApi, PartnerApi } from '../src/index';
@@ -25,6 +25,7 @@ import {
   INVITATION_TTL,
   type Invitation,
 } from '../src/onboarding';
+import { setProvider } from '../src/provider';
 import { db, T0, unwrap } from './helpers';
 
 const DAY = 86_400;
@@ -107,7 +108,21 @@ async function signNow(id: string, user: string, box: ReturnType<typeof outbox>,
   );
 }
 
+const PROVIDER = {
+  name: '2earl Teknoloji A.Ş.',
+  address: 'Maslak Mah. Büyükdere Cad. No: 255, Sarıyer, İstanbul',
+  taxOffice: 'Maslak',
+  vkn: '0123456789',
+  mersis: '0012345678900015',
+  kep: '2earl@hs01.kep.tr',
+  email: 'legal@2earl.com',
+};
+
 describe('onboarding', () => {
+  beforeEach(async () => {
+    unwrap(await setProvider(db(), 'staff-1', PROVIDER, T0));
+  });
+
   it('runs from invitation to an active partner', async () => {
     const box = outbox();
     const { id, user, org } = await ready(box);
@@ -406,6 +421,52 @@ describe('onboarding', () => {
     expect(unwrap(await listOnboardings(db(), 'signed')).every((o) => o.status === 'signed')).toBe(
       true,
     );
+  });
+
+  it('can’t be accepted while 2earl’s own details are missing', async () => {
+    const box = outbox();
+    const { id, user } = await ready(box);
+    await db().prepare('DELETE FROM provider_details').run();
+    try {
+      const contract = unwrap(await contractFor(db(), id, user, T0 + 200));
+      expect(contract.final).toBe(false);
+      expect(contract.text).toContain('[2earl Türkiye şirketinin ticaret unvanı]');
+      expect(await signNow(id, user, box)).toMatchObject({ error: 'provider_incomplete' });
+    } finally {
+      unwrap(await setProvider(db(), 'staff-1', PROVIDER, T0));
+    }
+    const contract = unwrap(await contractFor(db(), id, user, T0 + 300));
+    expect(contract.final).toBe(true);
+    expect(contract.text).toContain('2earl Teknoloji A.Ş.');
+    expect(contract.text).not.toContain('[2earl');
+  });
+
+  it('checks 2earl’s own details and audits every change', async () => {
+    expect(await setProvider(db(), 'staff-1', { ...PROVIDER, vkn: '123' }, T0)).toMatchObject({
+      error: 'invalid_provider',
+      detail: 'vkn',
+    });
+    expect(await setProvider(db(), 'staff-1', { ...PROVIDER, mersis: '' }, T0)).toMatchObject({
+      detail: 'mersis',
+    });
+    unwrap(
+      await setProvider(
+        db(),
+        'staff-2',
+        { ...PROVIDER, address: 'Levent, Beşiktaş, İstanbul' },
+        T0 + 5,
+      ),
+    );
+    const audit = await db()
+      .prepare(
+        `SELECT detail FROM audit_events WHERE action = 'provider.updated' ORDER BY at DESC LIMIT 1`,
+      )
+      .first<{ detail: string }>();
+    expect(JSON.parse(audit?.detail ?? '{}')).toMatchObject({
+      before: { address: PROVIDER.address },
+      after: { address: 'Levent, Beşiktaş, İstanbul' },
+    });
+    unwrap(await setProvider(db(), 'staff-1', PROVIDER, T0 + 6));
   });
 
   it('renders the agreement the same way twice, and differently for different details', async () => {
