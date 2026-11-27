@@ -370,6 +370,11 @@ A new version applies to companies that accept after it ships; signed text never
   optionally limited by IP allowlist, with per-key rate limits. OAuth client credentials through
   login is the better long-term option for banks; it is planned, not v1.
 
+**Email notices** (`src/notices.ts`, cron)
+- The operations contact given at onboarding gets an email when vehicles reach custody (at most
+  hourly, each vehicle once) and when cases expire within three days (at most daily), for
+  companies that don't use webhooks. Staff turn them off per partner in Y.
+
 **Webhooks**
 - Events: `case.delivered`, `case.expired`, `case.rejected`, `invoice.issued`.
 - Signed with HMAC-SHA256 over the timestamp and body, rejected outside a five-minute replay window.

@@ -4,6 +4,7 @@
  * be accepted.
  */
 import { auditStatement } from './audit';
+import { agreementReadyMail, type MailLocale, type Send } from './mail';
 import type { Provider } from './contract';
 import { fail, ok, type Result } from './result';
 
@@ -53,6 +54,7 @@ export async function setProvider(
   staffId: string,
   input: Record<string, unknown>,
   at: number,
+  notify?: { send: Send; kurumsal: string },
 ): Promise<Result<Provider>> {
   const checked = checkProvider(input);
   if (!checked.ok) return checked;
@@ -70,5 +72,31 @@ export async function setProvider(
       after: checked.value,
     }),
   ]);
+  // The first time the details are set, companies waiting on the agreement can accept it now.
+  if (before === null && notify) {
+    const { results } = await db
+      .prepare(
+        `SELECT id, contact_email, locale, company, json_extract(details, '$.legalName') AS legal_name
+         FROM onboardings WHERE status = 'in_progress' AND details IS NOT NULL AND expires_at > ?`,
+      )
+      .bind(at)
+      .all<{
+        id: string;
+        contact_email: string;
+        locale: MailLocale;
+        company: string;
+        legal_name: string | null;
+      }>();
+    for (const o of results) {
+      await notify.send(
+        agreementReadyMail(
+          o.locale,
+          o.contact_email,
+          o.legal_name ?? o.company,
+          `${notify.kurumsal}/onboarding/${o.id}/agreement`,
+        ),
+      );
+    }
+  }
   return checked;
 }
