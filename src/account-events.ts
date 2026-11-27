@@ -21,7 +21,7 @@ export async function deleteUser(db: D1Database, userId: string, at: number): Pr
     db
       .prepare(
         `UPDATE agents SET status = 'banned', legal_name = NULL, tckn_hash = NULL, city = NULL,
-           iban = NULL, iban_verified_at = NULL, vkn = NULL, updated_at = ?
+           iban = NULL, iban_verified_at = NULL, vkn = NULL, phone = NULL, updated_at = ?
          WHERE user_id = ?`,
       )
       .bind(at, userId),
@@ -35,7 +35,8 @@ export async function deleteUser(db: D1Database, userId: string, at: number): Pr
 export async function exportUser(db: D1Database, userId: string): Promise<Record<string, unknown>> {
   const agent = await db
     .prepare(
-      `SELECT status, legal_name, city, iban, tax_profile, vkn, created_at FROM agents WHERE user_id = ?`,
+      `SELECT status, legal_name, city, phone, iban, tax_profile, vkn, terms_version, terms_accepted_at,
+         created_at FROM agents WHERE user_id = ?`,
     )
     .bind(userId)
     .first();

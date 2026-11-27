@@ -301,6 +301,12 @@ describe('from delivery to payout', () => {
       ),
     );
     await writeSetting(db(), 'dual_approval_kurus', 500_000, 'staff-1', T0).run();
+    // Never to an IBAN nobody has checked.
+    await db().prepare('UPDATE agents SET iban_verified_at = NULL').run();
+    expect(await orderPayout(db(), 'staff-1', delivery.payout.id, T0 + DAYS(2))).toMatchObject({
+      error: 'iban_not_verified',
+    });
+    await db().prepare('UPDATE agents SET iban_verified_at = ?').bind(T0).run();
     try {
       expect(unwrap(await orderPayout(db(), 'staff-1', delivery.payout.id, T0 + DAYS(2)))).toEqual({
         status: 'ready',

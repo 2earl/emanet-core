@@ -14,3 +14,8 @@ output "merkez_d1_database_id" {
   description = "emanet-merkez wrangler.jsonc → d1_databases[].database_id"
   value       = cloudflare_d1_database.merkez.id
 }
+
+output "saha_d1_database_id" {
+  description = "emanet-saha wrangler.jsonc → d1_databases[].database_id"
+  value       = cloudflare_d1_database.saha.id
+}
