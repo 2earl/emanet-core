@@ -28,5 +28,5 @@ variable "saha_live" {
 variable "merkez_live" {
   description = "Attach emanet-merkez.2earl.com to the emanet-merkez Worker."
   type        = bool
-  default     = false
+  default     = true
 }
