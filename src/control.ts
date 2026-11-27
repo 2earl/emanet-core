@@ -77,7 +77,8 @@ export async function partnerDetail(
 export async function listAgents(db: D1Database, status: string | null): Promise<unknown[]> {
   const { results } = await db
     .prepare(
-      `SELECT a.user_id, a.status, a.legal_name, a.city, a.tax_profile, a.strikes, a.created_at,
+      `SELECT a.user_id, a.status, a.legal_name, a.city, a.phone, a.iban, a.tax_profile, a.vkn,
+         a.strikes, a.created_at, a.submitted_at, a.terms_version,
          a.iban_verified_at IS NOT NULL AS iban_verified,
          (SELECT count(*) FROM claims c WHERE c.agent_id = a.user_id AND c.closed_at IS NULL) AS open_claims,
          (SELECT count(*) FROM claims c WHERE c.agent_id = a.user_id AND c.close_reason = 'delivered') AS deliveries
@@ -440,4 +441,28 @@ export async function deprecateField(
     auditStatement(db, at, `staff:${staffId}`, 'field.deprecated', `field:${fieldId}`),
   ]);
   return result[0]?.meta.changes === 1 ? ok(null) : fail('not_found');
+}
+
+/**
+ * Staff confirm the agent's IBAN is in the agent's own name (bank name check, or a test transfer
+ * the agent read back). Payouts are ordered only to a verified IBAN.
+ */
+export async function verifyAgentIban(
+  db: D1Database,
+  staffId: string,
+  agentId: string,
+  iban: string,
+  at: number,
+): Promise<Result<null>> {
+  // The IBAN the staff member checked: if the agent changed it meanwhile, nothing is verified.
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE agents SET iban_verified_at = ?, updated_at = ?
+         WHERE user_id = ? AND iban = ? AND iban IS NOT NULL`,
+      )
+      .bind(at, at, agentId, iban),
+    auditStatement(db, at, `staff:${staffId}`, 'agent.iban_verified', `agent:${agentId}`),
+  ]);
+  return results[0]?.meta.changes === 1 ? ok(null) : fail('iban_changed');
 }

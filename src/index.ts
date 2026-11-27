@@ -12,6 +12,14 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { deleteOrganization, deleteUser, exportUser } from './account-events';
 import {
+  agentProfile,
+  earnings,
+  myClaims,
+  submitApplication,
+  updateProfile,
+  type ProfileInput,
+} from './agents';
+import {
   confirmCases,
   createPartner,
   expireCases,
@@ -59,6 +67,7 @@ import {
 import {
   deprecateField,
   listAgents,
+  verifyAgentIban,
   listInvoices,
   listPartners,
   listPayouts,
@@ -205,6 +214,26 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
 export class FieldApi extends WorkerEntrypoint<Env> {
   async register(agentId: string) {
     return registerAgent(this.env.DB, agentId, now());
+  }
+
+  async profile(agentId: string) {
+    return agentProfile(this.env.DB, agentId);
+  }
+
+  async updateProfile(agentId: string, input: ProfileInput) {
+    return updateProfile(this.env.DB, agentId, input, now());
+  }
+
+  async submit(agentId: string, termsVersion: string) {
+    return submitApplication(this.env.DB, agentId, termsVersion, now());
+  }
+
+  async myClaims(agentId: string) {
+    return myClaims(this.env.DB, agentId, now());
+  }
+
+  async earnings(agentId: string) {
+    return earnings(this.env.DB, agentId);
   }
 
   async hunts(agentId: string, query: { city?: string; limit?: number }) {
@@ -368,6 +397,10 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   async deprecateField(staffId: string, fieldId: string) {
     return deprecateField(this.env.DB, staffId, fieldId, now());
+  }
+
+  async verifyIban(staffId: string, agentId: string, iban: string) {
+    return verifyAgentIban(this.env.DB, staffId, agentId, iban, now());
   }
 
   async agents(status: string | null = null) {

@@ -40,6 +40,13 @@ export async function activeAgent(): Promise<string> {
   const id = crypto.randomUUID();
   await registerAgent(db(), id, T0);
   await setAgentStatus(db(), id, 'active', 'staff-1', 'kyc passed', T0);
+  // An IBAN staff have checked, so payouts can be ordered.
+  await db()
+    .prepare(
+      `UPDATE agents SET iban = 'TR330006100519786457841326', iban_verified_at = ? WHERE user_id = ?`,
+    )
+    .bind(T0, id)
+    .run();
   return id;
 }
 

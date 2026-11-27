@@ -504,11 +504,21 @@ export async function orderPayout(
   at: number,
 ): Promise<Result<{ status: 'ready' | 'approved' }>> {
   const payout = await db
-    .prepare('SELECT status, gross_kurus, ordered_by FROM payouts WHERE id = ?')
+    .prepare(
+      `SELECT p.status, p.gross_kurus, p.ordered_by, a.iban_verified_at
+       FROM payouts p JOIN agents a ON a.user_id = p.agent_id WHERE p.id = ?`,
+    )
     .bind(payoutId)
-    .first<{ status: string; gross_kurus: number; ordered_by: string | null }>();
+    .first<{
+      status: string;
+      gross_kurus: number;
+      ordered_by: string | null;
+      iban_verified_at: number | null;
+    }>();
   if (!payout) return fail('not_found');
   if (payout.status !== 'ready') return fail('payout_not_ready', payout.status);
+  // Money goes only to an IBAN staff have checked is in the agent's own name.
+  if (payout.iban_verified_at === null) return fail('iban_not_verified');
   const settings = await readSettings(db);
   const needsSecond = payout.gross_kurus >= settings.dual_approval_kurus;
 
