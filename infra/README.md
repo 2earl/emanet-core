@@ -5,7 +5,7 @@ workspace. Rationale: [docs/DESIGN.md §3](../docs/DESIGN.md).
 
 | File | Manages |
 |---|---|
-| `storage.tf` | D1 `emanet` (core), `emanet-kurumsal` and `emanet-merkez`; R2 bucket `emanet-evidence`. EU jurisdiction, protected from destroy |
+| `storage.tf` | D1 `emanet` (core), `emanet-kurumsal`, `emanet-merkez` and `emanet-saha`; R2 bucket `emanet-evidence`. EU jurisdiction, protected from destroy |
 | `worker.tf` | Custom domains `emanet-kurumsal`, `emanet-saha`, `emanet-merkez` `.2earl.com`, each switched on by a variable once its Worker exists |
 
 Not managed here: the 2earl.com zone and its settings (2earl/login `infra/`), Worker code, Worker
