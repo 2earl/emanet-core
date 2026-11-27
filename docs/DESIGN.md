@@ -303,12 +303,44 @@ Rules:
 
 ## 5. Emanet Kurumsal (X): creditors
 
-**Onboarding**
-1. Y sends an invitation by e-mail, QR code or link.
-2. The partner signs in with login and completes the company profile (VKN, tax office, KEP
-   address, e-invoice status).
-3. The partner accepts the data-processing and outsourcing contract terms, versioned.
-4. The partner is activated in Y.
+**Onboarding** (`src/onboarding.ts`, `src/contract.ts`, `src/mail.ts`)
+
+```
+invited ─(link opened with the invited address)→ in_progress ─(agreement accepted)→ signed
+signed ─(another staff member approves)→ approved = active partner
+signed ─(staff send it back for changes)→ in_progress (acceptance cleared)
+invited | in_progress | signed ─(staff)→ cancelled | rejected
+invited | in_progress ─(14 days)→ expired ─(staff send a new link)→ invited | in_progress
+```
+
+1. Staff invite a company in Y: name, kind, contact name and address, language (Turkish or
+   English), the proposed price list and re-confirmation days. One open invitation per address.
+2. The core emails a link to Kurumsal (`/join/<secret>`, valid 14 days). Only the email has the
+   secret; the database keeps its SHA-256. A new link (staff "Send again", or the day-3 and day-7
+   reminders) replaces the old one.
+3. The contact signs in with login. Kurumsal asks login whether that account has the invited
+   address, verified (`OrganizationProvisioning.hasAddress`); only then does the core give the
+   onboarding to the account, and only to the first one.
+4. The contact creates the company's login organization from Kurumsal (login's
+   `OrganizationProvisioning.create`, owner = the contact) or picks one they own. One company per
+   organization.
+5. The contact gives the company's details (legal name, address, tax office, VKN, MERSİS, KEP,
+   signatory, billing and operations contacts, e-invoice) and uploads documents to R2
+   `emanet-documents`: signature circular and tax certificate expected, trade registry gazette
+   and others optional.
+6. Kurumsal shows the agreement rendered with those details and the price list (Annex 2). The
+   signatory confirms they may bind the company and accepts. The core re-renders it and refuses
+   if the version or SHA-256 differs from what was shown, then keeps the exact text, its hash,
+   the signer's name, title, IP and time. A receipt with the hash goes to the contact; a note to
+   staff.
+7. Another staff member than the one who invited checks the details and documents in Y and
+   approves: in one D1 batch the partner is created active with the details, the price list and
+   the agreement's version and time, and the onboarding is closed. The contact is emailed. Staff
+   can instead send it back for changes (the acceptance is cleared) or reject it with a reason.
+
+The agreement (`src/contract.ts`, version `CONTRACT_VERSION`) is a draft for a lawyer to review.
+Its provider details (`PROVIDER`) are placeholders until 2earl's company details are filled in.
+A new version applies to companies that accept after it ships; signed text never changes.
 
 **Vehicles**
 - Add a vehicle by form, by CSV/XLSX upload (dry-run preview, row-level errors, idempotent on
