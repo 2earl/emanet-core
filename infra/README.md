@@ -16,7 +16,7 @@ Zone read and Workers Routes edit.
 
 ## How changes are applied
 
-HCP Terraform (workspace `2earl-emanet`) keeps the state only; Terraform runs in GitHub Actions
+HCP Terraform (workspace `2earl-emanet-core`) keeps the state only; Terraform runs in GitHub Actions
 (`.github/workflows/infra.yml`), so a run never depends on HCP fetching the repository.
 
 1. Open a PR that changes files here. The `check` job runs `terraform fmt`, `init` and

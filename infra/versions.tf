@@ -7,7 +7,7 @@ terraform {
   cloud {
     organization = "2earl"
     workspaces {
-      name = "2earl-emanet"
+      name = "2earl-emanet-core"
     }
   }
 
