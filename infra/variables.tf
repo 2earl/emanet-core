@@ -34,5 +34,5 @@ variable "merkez_live" {
 variable "web_live" {
   description = "Attach emanet.dev to the emanet-web Worker (2earl/emanet-web), after its first deploy."
   type        = bool
-  default     = false
+  default     = true
 }
