@@ -39,14 +39,17 @@ export async function activePartner(
 export async function activeAgent(): Promise<string> {
   const id = crypto.randomUUID();
   await registerAgent(db(), id, T0);
-  await setAgentStatus(db(), id, 'active', 'staff-1', 'kyc passed', T0);
-  // An IBAN staff have checked, so payouts can be ordered.
+  // The application as the agent sent it, with an IBAN staff have checked (payouts need one).
   await db()
     .prepare(
-      `UPDATE agents SET iban = 'TR330006100519786457841326', iban_verified_at = ? WHERE user_id = ?`,
+      `UPDATE agents SET status = 'kyc_pending', legal_name = 'Deneme Saha', city = 'İstanbul',
+         phone = '+905321234567', iban = 'TR330006100519786457841326', iban_verified_at = ?,
+         terms_version = 'test', terms_accepted_at = ?, submitted_at = ? WHERE user_id = ?`,
     )
-    .bind(T0, id)
+    .bind(T0, T0, T0, id)
     .run();
+  const activated = await setAgentStatus(db(), id, 'active', 'staff-1', 'kyc passed', T0);
+  if (!activated.ok) throw new Error(activated.error);
   return id;
 }
 

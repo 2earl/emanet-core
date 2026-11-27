@@ -458,8 +458,15 @@ A new version applies to companies that accept after it ships; signed text never
   - Counters for SLA breaches.
 - **Review queue**:
   - Evidence side by side, with EXIF and GPS against the case places.
-  - Approve "delivered", or reject with a reason.
+  - Approve "delivered", or reject with a reason (`rejectDelivery`): the claim ends, its photos
+    can't be used again, the agent reads the reason and waits the cooldown, and a false report can
+    cost a strike. Nothing is booked and no partner is told.
+  - The review shows what to look at twice: how soon after claiming the sighting came, how far it
+    was from the nearest place a creditor gave, the agent's deliveries and strikes.
   - Approving notifies partners (webhook) and posts the journal entries.
+  - While a delivery waits here, its cases can't be changed, withdrawn or left to expire
+    (`delivery_in_review`): the vehicle is already in the car park, and taking the case away then
+    would cancel the fee for a delivery already made. Staff decide first.
 - **Configuration**:
   - Claim length T, cooldown C, max claims K.
   - Re-confirm window N per partner.
@@ -477,13 +484,20 @@ A new version applies to companies that accept after it ships; signed text never
     4. The payout is sent to the bank (API or bulk file).
     5. The bank's reference is recorded.
   - **Journal**: trial balance; exports for the accountant; KDV and withholding totals per period.
+    Each money event is booked once (a unique index on the entry's kind and reference), so two
+    people pressing the same button together can't double an entry.
+  - **E-invoice number**: staff record the provider's number (and ETTN) on the invoice.
 - **Bank integration**: depends on the bank chosen. Turkish banks offer corporate APIs to Turkish
   legal entities that are their customers and sign an API agreement. [Kesin, İş Bankası's
   catalogue]
   - v1: upload the bank statement (CSV or MT940) and auto-match by amount and reference; payouts
     exported as a bulk EFT file.
   - v2: the bank's API for account movements and FAST/EFT payouts.
-- **Audit**: every admin action is logged and attributed. Support has read-only access.
+- **Audit**: every admin action is logged and attributed, and staff read the log in Y (by subject
+  or actor; reading it is logged too). Support has read-only access. Changes to a partner's API
+  keys and webhooks in X are recorded here as well (`integration.*`).
+- **Agents' status**: an agent becomes active only from the identity check (or back from a
+  suspension) and only with a sent application; staff can't skip it by setting the status.
 
 **Money flow and licensing.** We sell partners a finding service and buy agents' reporting
 services; two separate contracts. We must never collect money "on behalf of" agents: that looks
@@ -504,7 +518,8 @@ must follow this structure.
 - Addresses are seen by the claiming agent only, for the claim's lifetime.
 
 **Retention**
-- Case places are deleted 30 days after a case closes.
+- Thirty days after a case closes, its places lose their street address, coordinates, note and
+  custom fields (cron, `redactClosedCasePlaces`); district and city stay for the partner's reports.
 - Evidence is kept as long as the partner contract requires, plus the statutory period for
   invoices.
 - KYC evidence is deleted after verification; the results stay.

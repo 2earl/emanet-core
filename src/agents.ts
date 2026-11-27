@@ -206,6 +206,8 @@ export interface MyClaim {
   expires_at: number;
   closed_at: number | null;
   close_reason: string | null;
+  /** Staff's reason, when a reported delivery wasn't accepted. */
+  close_note: string | null;
   evidence: EvidenceKind[];
   /** delivery: staff are checking the evidence. */
   under_review: boolean;
@@ -221,7 +223,7 @@ export async function myClaims(
   const { results } = await db
     .prepare(
       `SELECT cl.id, p.plate, v.make, v.model, cl.state, cl.claimed_at, cl.expires_at, cl.closed_at,
-         cl.close_reason,
+         cl.close_reason, cl.close_note,
          (SELECT json_group_array(kind) FROM evidence e WHERE e.claim_id = cl.id) AS evidence,
          EXISTS (SELECT 1 FROM review_items r WHERE r.kind = 'delivery' AND r.subject_id = cl.id
                    AND r.status = 'open') AS under_review,

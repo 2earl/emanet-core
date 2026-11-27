@@ -16,7 +16,8 @@
  * We sell partners a service and buy agents' services: two contracts, never money collected on
  * an agent's behalf (DESIGN §7, Law 6493).
  */
-import { auditStatement, outboxStatement } from './audit';
+import { auditStatement, auditStatementIf, outboxStatement } from './audit';
+import { cooldownStatement } from './claims';
 import { payoutFor, percentOf, type PayoutRule } from './pricing';
 import { fail, newId, ok, type Result } from './result';
 import { readSettings } from './settings';
@@ -215,7 +216,9 @@ export async function confirmDelivery(
       .prepare('UPDATE vehicles SET custody_since = ?, updated_at = ? WHERE id = ?')
       .bind(at, at, claim.vehicle_id),
     db
-      .prepare(`UPDATE claims SET closed_at = ?, close_reason = 'delivered' WHERE id = ?`)
+      .prepare(
+        `UPDATE claims SET closed_at = ?, close_reason = 'delivered' WHERE id = ? AND closed_at IS NULL`,
+      )
       .bind(at, claimId),
     db
       .prepare(
@@ -276,12 +279,95 @@ export async function confirmDelivery(
       cases: cases.map((row) => row.id),
     }),
   ];
-  await db.batch(statements);
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    // Two staff confirming at once: the payout and its journal entry exist once per case.
+    if (error instanceof Error && /UNIQUE constraint failed/.test(error.message)) {
+      return fail('conflict_retry');
+    }
+    throw error;
+  }
   return ok({
     vehicle_id: claim.vehicle_id,
     cases: cases.map((row) => row.id),
     payout: { id: payoutId, gross_kurus: gross, withholding_kurus: withholding, net_kurus: net },
   });
+}
+
+/**
+ * Staff don't accept a reported delivery: the evidence doesn't show this vehicle in a custodian
+ * car park. The claim ends, its photos are marked rejected (and can't be used again: a photo's
+ * hash is recorded once), the agent waits the usual cooldown before claiming the vehicle again,
+ * and reads the reason. A false report can also cost the agent a strike. Nothing is booked and
+ * no partner is told: for them nothing happened.
+ */
+export async function rejectDelivery(
+  db: D1Database,
+  staffId: string,
+  claimId: string,
+  input: { reason: string; strike: boolean },
+  at: number,
+): Promise<Result<{ strikes: number }>> {
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (!reason || reason.length > 200) return fail('invalid_reason');
+  const claim = await db
+    .prepare(
+      `SELECT c.vehicle_id, c.agent_id, c.state, a.strikes FROM claims c
+       JOIN agents a ON a.user_id = c.agent_id WHERE c.id = ? AND c.closed_at IS NULL`,
+    )
+    .bind(claimId)
+    .first<{ vehicle_id: string; agent_id: string; state: string; strikes: number }>();
+  if (!claim) return fail('not_found');
+  if (claim.state !== 'reporting') return fail('no_sighting');
+  // Over RPC the flag may be anything; only a real `true` costs a strike.
+  const strike = (input.strike as unknown) === true;
+  const settings = await readSettings(db);
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE claims SET closed_at = ?, close_reason = 'rejected', close_note = ?
+         WHERE id = ? AND closed_at IS NULL`,
+      )
+      .bind(at, reason, claimId),
+    db
+      .prepare(
+        `UPDATE evidence SET status = 'rejected', reviewed_by = ?
+         WHERE claim_id = ? AND status = 'submitted'
+           AND EXISTS (SELECT 1 FROM claims WHERE id = ? AND closed_at = ? AND close_reason = 'rejected')`,
+      )
+      .bind(staffId, claimId, claimId, at),
+    db
+      .prepare(
+        `UPDATE review_items SET status = 'resolved', resolved_by = ?, resolved_at = ?
+         WHERE kind = 'delivery' AND subject_id = ? AND status = 'open'`,
+      )
+      .bind(staffId, at, claimId),
+    cooldownStatement(db, claim.agent_id, claim.vehicle_id, at + settings.cooldown_hours * 3600),
+    ...(strike
+      ? [
+          db
+            .prepare(
+              `UPDATE agents SET strikes = strikes + 1, updated_at = ? WHERE user_id = ?
+                 AND EXISTS (SELECT 1 FROM claims WHERE id = ? AND closed_at = ? AND close_reason = 'rejected')`,
+            )
+            .bind(at, claim.agent_id, claimId, at),
+        ]
+      : []),
+    auditStatementIf(
+      db,
+      at,
+      `staff:${staffId}`,
+      'delivery.rejected',
+      `claim:${claimId}`,
+      { reason, strike, vehicle: claim.vehicle_id },
+      `EXISTS (SELECT 1 FROM claims WHERE id = ? AND closed_at = ? AND close_reason = 'rejected')`,
+      claimId,
+      at,
+    ),
+  ]);
+  if (results[0]?.meta.changes !== 1) return fail('conflict_retry');
+  return ok({ strikes: claim.strikes + (strike ? 1 : 0) });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -381,6 +467,50 @@ export async function issueInvoice(
   });
 }
 
+const INVOICE_NUMBER = /^[A-Z0-9][A-Z0-9/-]{2,31}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The number (and ETTN, if any) the e-invoice provider gave an invoice, entered by staff after
+ * sending it. It can be corrected while it is wrong; every change is audited with both values.
+ */
+export async function setInvoiceNumber(
+  db: D1Database,
+  staffId: string,
+  invoiceId: string,
+  input: { number: string; uuid?: string | null },
+  at: number,
+): Promise<Result<null>> {
+  const number = typeof input.number === 'string' ? input.number.trim().toUpperCase() : '';
+  if (!INVOICE_NUMBER.test(number)) return fail('invalid_invoice_number');
+  const uuid =
+    typeof input.uuid === 'string' && input.uuid.trim() ? input.uuid.trim().toLowerCase() : null;
+  if (uuid !== null && !UUID.test(uuid)) return fail('invalid_invoice_uuid');
+  const before = await db
+    .prepare('SELECT number, e_invoice_uuid, status FROM invoices WHERE id = ?')
+    .bind(invoiceId)
+    .first<{ number: string | null; e_invoice_uuid: string | null; status: string }>();
+  if (!before) return fail('not_found');
+  if (before.status === 'cancelled') return fail('invoice_not_open');
+  try {
+    await db.batch([
+      db
+        .prepare('UPDATE invoices SET number = ?, e_invoice_uuid = ? WHERE id = ?')
+        .bind(number, uuid ?? before.e_invoice_uuid, invoiceId),
+      auditStatement(db, at, `staff:${staffId}`, 'invoice.numbered', `invoice:${invoiceId}`, {
+        before: before.number,
+        after: number,
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && /UNIQUE constraint failed/.test(error.message)) {
+      return fail('duplicate_invoice_number');
+    }
+    throw error;
+  }
+  return ok(null);
+}
+
 // ---------------------------------------------------------------------------------------------
 // 3. Receipt
 
@@ -415,6 +545,14 @@ export async function recordReceipt(
       .bind(receipt.invoiceId, receipt.partnerId)
       .first();
     if (!invoice) return fail('invoice_not_open');
+  } else {
+    // A payment not matched to an invoice still belongs to a partner that exists: the entry
+    // would otherwise open a receivable account for nobody.
+    const partner = await db
+      .prepare('SELECT 1 AS yes FROM partners WHERE id = ?')
+      .bind(receipt.partnerId)
+      .first();
+    if (!partner) return fail('not_found');
   }
   const id = newId();
   const paid = invoice !== null && invoice.paid_kurus + receipt.amountKurus >= invoice.total_kurus;
@@ -460,21 +598,20 @@ export async function recordReceipt(
         .prepare(
           `UPDATE invoices SET paid_kurus = paid_kurus + ?,
              status = CASE WHEN paid_kurus + ? >= total_kurus THEN 'paid' ELSE status END
-           WHERE id = ?`,
+           WHERE id = ? AND status = 'issued'`,
         )
         .bind(receipt.amountKurus, receipt.amountKurus, receipt.invoiceId),
+      // Decided by what the invoice is once this receipt is in, not by what was read before the
+      // batch: two part payments arriving together still release the payouts.
+      db
+        .prepare(
+          `UPDATE payouts SET status = 'ready', updated_at = ?
+           WHERE status = 'awaiting_receipt'
+             AND case_id IN (SELECT case_id FROM invoice_lines WHERE invoice_id = ?)
+             AND EXISTS (SELECT 1 FROM invoices WHERE id = ? AND status = 'paid')`,
+        )
+        .bind(at, receipt.invoiceId, receipt.invoiceId),
     );
-    if (paid) {
-      statements.push(
-        db
-          .prepare(
-            `UPDATE payouts SET status = 'ready', updated_at = ?
-             WHERE status = 'awaiting_receipt'
-               AND case_id IN (SELECT case_id FROM invoice_lines WHERE invoice_id = ?)`,
-          )
-          .bind(at, receipt.invoiceId),
-      );
-    }
   }
   try {
     await db.batch(statements);
@@ -486,6 +623,13 @@ export async function recordReceipt(
       return fail('duplicate_bank_ref');
     }
     throw error;
+  }
+  if (receipt.invoiceId !== undefined) {
+    const after = await db
+      .prepare('SELECT status FROM invoices WHERE id = ?')
+      .bind(receipt.invoiceId)
+      .first<{ status: string }>();
+    return ok({ id, invoice_paid: after?.status === 'paid' });
   }
   return ok({ id, invoice_paid: paid });
 }
@@ -524,27 +668,52 @@ export async function orderPayout(
 
   if (payout.ordered_by === null) {
     const status = needsSecond ? 'ready' : 'approved';
-    await db.batch([
+    const results = await db.batch([
       db
         .prepare(
           `UPDATE payouts SET ordered_by = ?, approved_by = ?, status = ?, updated_at = ?
            WHERE id = ? AND status = 'ready' AND ordered_by IS NULL`,
         )
         .bind(staffId, needsSecond ? null : staffId, status, at, payoutId),
-      auditStatement(db, at, `staff:${staffId}`, 'payout.ordered', `payout:${payoutId}`),
+      auditStatementIf(
+        db,
+        at,
+        `staff:${staffId}`,
+        'payout.ordered',
+        `payout:${payoutId}`,
+        {},
+        'EXISTS (SELECT 1 FROM payouts WHERE id = ? AND ordered_by = ? AND updated_at = ?)',
+        payoutId,
+        staffId,
+        at,
+      ),
     ]);
+    // Another admin ordered it in the same moment: the page shows who, on reload.
+    if (results[0]?.meta.changes !== 1) return fail('conflict_retry');
     return ok({ status });
   }
   if (payout.ordered_by === staffId) return fail('second_approver_required');
-  await db.batch([
+  const results = await db.batch([
     db
       .prepare(
         `UPDATE payouts SET approved_by = ?, status = 'approved', updated_at = ?
-         WHERE id = ? AND status = 'ready'`,
+         WHERE id = ? AND status = 'ready' AND ordered_by IS NOT NULL AND ordered_by != ?`,
       )
-      .bind(staffId, at, payoutId),
-    auditStatement(db, at, `staff:${staffId}`, 'payout.approved', `payout:${payoutId}`),
+      .bind(staffId, at, payoutId, staffId),
+    auditStatementIf(
+      db,
+      at,
+      `staff:${staffId}`,
+      'payout.approved',
+      `payout:${payoutId}`,
+      {},
+      `EXISTS (SELECT 1 FROM payouts WHERE id = ? AND approved_by = ? AND status = 'approved' AND updated_at = ?)`,
+      payoutId,
+      staffId,
+      at,
+    ),
   ]);
+  if (results[0]?.meta.changes !== 1) return fail('conflict_retry');
   return ok({ status: 'approved' });
 }
 
@@ -593,6 +762,10 @@ export async function markPayoutSent(
       /UNIQUE constraint failed: payouts\.bank_ref/.test(error.message)
     ) {
       return fail('duplicate_bank_ref');
+    }
+    // Marked as sent by someone else in the same moment: its entry is booked once.
+    if (error instanceof Error && /UNIQUE constraint failed/.test(error.message)) {
+      return fail('conflict_retry');
     }
     throw error;
   }

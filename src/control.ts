@@ -149,6 +149,30 @@ export interface ReviewDetail {
   sightings?: unknown[];
   evidence?: unknown[];
   cases?: unknown[];
+  /** For deliveries: what to look at twice before confirming (docs/DESIGN.md §6, anti-fraud). */
+  signals?: DeliverySignals;
+}
+
+export interface DeliverySignals {
+  /** From the claim to the first sighting; a report minutes after claiming deserves a look. */
+  seconds_to_sighting: number | null;
+  /** From the nearest sighting to the nearest place a creditor gave with coordinates. */
+  nearest_place_m: number | null;
+  agent_deliveries: number;
+  agent_strikes: number;
+}
+
+/** Great-circle distance in metres. */
+export function distanceMetres(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * 6_371_000 * Math.asin(Math.min(1, Math.sqrt(h))));
 }
 
 export async function reviewDetail(
@@ -172,9 +196,9 @@ export async function reviewDetail(
          WHERE c.id = ?`,
       )
       .bind(item.subject_id)
-      .first<{ vehicle_id: string }>();
+      .first<{ vehicle_id: string; agent_id: string; claimed_at: number }>();
     if (!claim) return fail('not_found');
-    const [sightings, evidence, cases] = await Promise.all([
+    const [sightings, evidence, cases, places, agent] = await Promise.all([
       db
         .prepare(
           'SELECT lat, lng, accuracy_m, taken_at, received_at FROM sightings WHERE claim_id = ? ORDER BY received_at',
@@ -194,13 +218,43 @@ export async function reviewDetail(
         )
         .bind(claim.vehicle_id)
         .all(),
+      db
+        .prepare(
+          `SELECT cp.lat, cp.lng FROM case_places cp JOIN cases c ON c.id = cp.case_id
+           WHERE c.vehicle_id = ? AND c.status = 'active' AND cp.lat IS NOT NULL AND cp.lng IS NOT NULL`,
+        )
+        .bind(claim.vehicle_id)
+        .all<{ lat: number; lng: number }>(),
+      db
+        .prepare(
+          `SELECT a.strikes,
+             (SELECT count(*) FROM claims c WHERE c.agent_id = a.user_id AND c.close_reason = 'delivered') AS deliveries
+           FROM agents a WHERE a.user_id = ?`,
+        )
+        .bind(claim.agent_id)
+        .first<{ strikes: number; deliveries: number }>(),
     ]);
+    const seen = sightings.results as { lat: number; lng: number; received_at: number }[];
+    let nearest: number | null = null;
+    for (const sighting of seen) {
+      for (const place of places.results) {
+        const metres = distanceMetres(sighting, place);
+        if (nearest === null || metres < nearest) nearest = metres;
+      }
+    }
+    const first = seen[0];
     return ok({
       item: base,
       claim,
       sightings: sightings.results,
       evidence: evidence.results,
       cases: cases.results,
+      signals: {
+        seconds_to_sighting: first ? Math.max(0, first.received_at - claim.claimed_at) : null,
+        nearest_place_m: nearest,
+        agent_deliveries: agent?.deliveries ?? 0,
+        agent_strikes: agent?.strikes ?? 0,
+      },
     });
   }
   const row = await db
@@ -468,4 +522,58 @@ export async function verifyAgentIban(
     auditStatement(db, at, `staff:${staffId}`, 'agent.iban_verified', `agent:${agentId}`),
   ]);
   return results[0]?.meta.changes === 1 ? ok(null) : fail('iban_changed');
+}
+
+export interface AuditRow {
+  id: string;
+  at: number;
+  actor: string;
+  action: string;
+  subject: string;
+  detail: Record<string, unknown>;
+}
+
+const AUDIT_FILTER = /^[A-Za-z0-9_.:/@-]{1,120}$/;
+
+/**
+ * The audit log, newest first: who did what to what (docs/DESIGN.md §7, Audit). Filter by the
+ * exact subject ("partner:<id>", "claim:<id>") or actor ("staff:<id>", "agent:<id>"); page with
+ * `before`, the `at` of the last row seen.
+ */
+export async function auditLog(
+  db: D1Database,
+  query: { subject?: string; actor?: string; before?: number; limit?: number },
+): Promise<Result<{ events: AuditRow[]; next_before: number | null }>> {
+  const subject = query.subject?.trim() ? query.subject.trim() : null;
+  const actor = query.actor?.trim() ? query.actor.trim() : null;
+  if (
+    (subject !== null && !AUDIT_FILTER.test(subject)) ||
+    (actor !== null && !AUDIT_FILTER.test(actor))
+  ) {
+    return fail('invalid_filter');
+  }
+  const before =
+    query.before !== undefined && Number.isFinite(query.before) ? Math.floor(query.before) : null;
+  const limit = Math.min(Math.max(Math.floor(query.limit ?? 100) || 100, 1), 200);
+  const { results } = await db
+    .prepare(
+      `SELECT id, at, actor, action, subject, detail FROM audit_events
+       WHERE (? IS NULL OR subject = ?) AND (? IS NULL OR actor = ?) AND (? IS NULL OR at < ?)
+       ORDER BY at DESC, id LIMIT ?`,
+    )
+    .bind(subject, subject, actor, actor, before, before, limit + 1)
+    .all<Omit<AuditRow, 'detail'> & { detail: string }>();
+  const page = results.slice(0, limit);
+  const parse = (text: string): Record<string, unknown> => {
+    try {
+      const value = JSON.parse(text) as unknown;
+      return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  };
+  return ok({
+    events: page.map((row) => ({ ...row, detail: parse(row.detail) })),
+    next_before: results.length > limit ? (page.at(-1)?.at ?? null) : null,
+  });
 }
