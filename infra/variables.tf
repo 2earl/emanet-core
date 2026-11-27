@@ -16,7 +16,7 @@ variable "zone_name" {
 variable "kurumsal_live" {
   description = "Attach emanet-kurumsal.2earl.com to the emanet-kurumsal Worker."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "saha_live" {
