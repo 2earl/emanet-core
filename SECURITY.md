@@ -5,8 +5,8 @@ to read but proprietary: see LICENSE.
 
 ## Reporting a vulnerability
 
-Write to **legal@2earl.com** with "Security" in the subject. The same contact is published at
-<https://2earl.com/.well-known/security.txt>. Please don't disclose it before it's fixed.
+Write to **iletisim@emanet.dev** with "Security" in the subject. The same contact is published at
+<https://emanet.dev/.well-known/security.txt>. Please don't disclose it before it's fixed.
 
 Include as much of the following as you can:
 
