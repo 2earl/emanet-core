@@ -23,7 +23,7 @@
     {
       "binding": "DB",
       "database_name": "emanet",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "9e5fbf19-ed8a-482a-9a74-e54b8157c82c",
       "migrations_dir": "migrations",
     },
   ],
