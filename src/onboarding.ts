@@ -29,6 +29,7 @@ import {
   type Send,
 } from './mail';
 import { checkPriceList, type PriceList } from './pricing';
+import { provider } from './provider';
 import { fail, newId, ok, type Result } from './result';
 
 export const INVITATION_TTL = 14 * 24 * 3600;
@@ -845,6 +846,7 @@ export async function contractFor(
       JSON.parse(row.value.details) as Details,
       prices,
       row.value.reconfirm_days,
+      await provider(db),
     ),
   );
 }
@@ -880,6 +882,7 @@ export async function sign(
   if (title.length < 2) return fail('invalid_signer');
   const contract = await contractFor(db, id, userId, at);
   if (!contract.ok) return contract;
+  if (!contract.value.final) return fail('provider_incomplete');
   if (input.version !== contract.value.version || input.sha256 !== contract.value.sha256) {
     return fail('contract_changed');
   }

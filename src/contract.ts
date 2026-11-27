@@ -1,7 +1,8 @@
 /**
  * The service agreement a company accepts while onboarding (docs/CONTRACT.md explains how it is
  * versioned and changed). Turkish is the binding text. Placeholders in {{double braces}} are
- * filled from the company's onboarding details, the price list and PROVIDER.
+ * filled from the company's onboarding details, the price list and 2earl's own details, which staff
+ * keep in Emanet Merkez (provider.ts).
  *
  * DRAFT for legal review: the text was written for 2earl by its engineering assistant, not a
  * lawyer. Change CONTRACT_VERSION with every change to the text: a signature records the version
@@ -10,8 +11,19 @@
 
 export const CONTRACT_VERSION = '2026-11-27-draft';
 
-/** 2earl's Turkish company, as it appears on invoices. Fill in before the first real signature. */
-export const PROVIDER = {
+/** 2earl's Turkish company, as the agreement and invoices name it. */
+export interface Provider {
+  name: string;
+  address: string;
+  taxOffice: string;
+  vkn: string;
+  mersis: string;
+  kep: string;
+  email: string;
+}
+
+/** What the agreement shows until staff have entered 2earl's details; nobody can sign it then. */
+export const PROVIDER_PLACEHOLDER: Provider = {
   name: '[2earl Türkiye şirketinin ticaret unvanı]',
   address: '[Merkez adresi]',
   taxOffice: '[Vergi dairesi]',
@@ -265,21 +277,25 @@ export interface RenderedContract {
   /** Plain text, exactly what is hashed and kept with a signature. */
   text: string;
   sha256: string;
+  /** False while 2earl's own details are missing: the text can be read, not accepted. */
+  final: boolean;
 }
 
 export async function renderContract(
   customer: ContractParty,
   prices: ContractPrice | null,
   reconfirmDays: number,
+  provider: Provider | null = null,
 ): Promise<RenderedContract> {
+  const p = provider ?? PROVIDER_PLACEHOLDER;
   const values: Record<string, string> = {
-    'provider.name': PROVIDER.name,
-    'provider.address': PROVIDER.address,
-    'provider.taxOffice': PROVIDER.taxOffice,
-    'provider.vkn': PROVIDER.vkn,
-    'provider.mersis': PROVIDER.mersis,
-    'provider.kep': PROVIDER.kep,
-    'provider.email': PROVIDER.email,
+    'provider.name': p.name,
+    'provider.address': p.address,
+    'provider.taxOffice': p.taxOffice,
+    'provider.vkn': p.vkn,
+    'provider.mersis': p.mersis,
+    'provider.kep': p.kep,
+    'provider.email': p.email,
     'customer.legalName': customer.legalName,
     'customer.address': customer.address,
     'customer.taxOffice': customer.taxOffice,
@@ -305,5 +321,5 @@ export async function renderContract(
     await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)),
   );
   const sha256 = Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
-  return { version: CONTRACT_VERSION, sections, text, sha256 };
+  return { version: CONTRACT_VERSION, sections, text, sha256, final: provider !== null };
 }

@@ -339,7 +339,7 @@ invited | in_progress ─(14 days)→ expired ─(staff send a new link)→ invi
    can instead send it back for changes (the acceptance is cleared) or reject it with a reason.
 
 The agreement (`src/contract.ts`, version `CONTRACT_VERSION`) is a draft for a lawyer to review.
-Its provider details (`PROVIDER`) are placeholders until 2earl's company details are filled in.
+2earl's own company details (unvan, address, tax office, VKN, MERSİS, KEP) are configuration: staff set them in Y → Settings (`provider_details`, audited). Until then the agreement shows placeholders and can't be accepted (`provider_incomplete`).
 A new version applies to companies that accept after it ships; signed text never changes.
 
 **Vehicles**
