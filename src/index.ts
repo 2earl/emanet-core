@@ -112,7 +112,7 @@ import {
   timeline,
 } from './partner-views';
 import { checkPayoutRule } from './pricing';
-import { providerForStaff, setProvider } from './provider';
+import { provider, providerForStaff, setProvider } from './provider';
 import { fail, now, ok, type Result } from './result';
 import { SETTING_DEFAULTS, readSettings, writeSetting, type SettingKey } from './settings';
 
@@ -652,6 +652,16 @@ export class ControlApi extends WorkerEntrypoint<Env> {
       .bind(now())
       .first<{ rule: string; valid_from: number }>();
     return ok(row ? { rule: JSON.parse(row.rule) as unknown, valid_from: row.valid_from } : null);
+  }
+}
+
+/**
+ * For emanet.dev, the public site: what its legal pages must name (KVKK's data controller, TTK
+ * 1524's company details). Only what 2earl publishes anyway; null until staff have set it.
+ */
+export class PublicApi extends WorkerEntrypoint<Env> {
+  async company() {
+    return ok(await provider(this.env.DB));
   }
 }
 

@@ -1,9 +1,10 @@
 /**
  * Emanet's email to companies being onboarded, and to 2earl's staff about them. Cloudflare Email
- * Service (the MAILER binding), from noreply@2earl.com; replies reach legal@2earl.com.
+ * Service (the MAILER binding), from noreply@emanet.dev; replies reach iletisim@emanet.dev, the
+ * one address Emanet gives everyone.
  *
  * Plain text and a small HTML version, in the language chosen when the company was invited. No
- * images, no tracking. Links go only to 2earl's own sites. Sending never throws.
+ * images, no tracking. Links go only to Emanet's own sites. Sending never throws.
  */
 
 export type MailLocale = 'tr' | 'en';
@@ -18,8 +19,9 @@ export interface Mail {
 
 export type Send = (mail: Mail) => Promise<boolean>;
 
-const SENDER = { email: 'noreply@2earl.com', name: 'Emanet · 2earl' };
-const REPLY_TO = 'legal@2earl.com';
+const SENDER = { email: 'noreply@emanet.dev', name: 'Emanet' };
+export const REPLY_TO = 'iletisim@emanet.dev';
+const FOOTER = 'Emanet · emanet.dev · iletisim@emanet.dev';
 
 const esc = (value: string) =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -29,7 +31,7 @@ function text(mail: Mail): string {
     ...mail.paragraphs,
     ...(mail.action ? [`${mail.action.label}: ${mail.action.url}`] : []),
     ...(mail.after ?? []),
-    '—\nEmanet · 2earl',
+    `—\n${FOOTER}\nGizlilik: https://emanet.dev/gizlilik`,
   ].join('\n\n');
 }
 
@@ -39,7 +41,7 @@ function html(mail: Mail): string {
   const button = mail.action
     ? `<p style="margin:24px 0"><a href="${esc(mail.action.url)}" style="background:#b9381b;color:#ffffff;padding:12px 20px;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px">${esc(mail.action.label)}</a></p><p style="margin:0 0 16px;font-size:12px;color:#5c5a60;word-break:break-all">${esc(mail.action.url)}</p>`
     : '';
-  return `<!doctype html><html><body style="margin:0;background:#f7f7f8;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif"><div style="max-width:560px;margin:0 auto;padding:32px 24px;background:#ffffff"><p style="margin:0 0 24px;font-weight:700;font-size:16px">Emanet</p>${mail.paragraphs.map((t) => p(t)).join('')}${button}${(mail.after ?? []).map((t) => p(t, true)).join('')}<p style="margin:32px 0 0;font-size:12px;color:#5c5a60">Emanet · 2earl</p></div></body></html>`;
+  return `<!doctype html><html><body style="margin:0;background:#f7f7f8;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif"><div style="max-width:560px;margin:0 auto;padding:32px 24px;background:#ffffff"><p style="margin:0 0 24px;font-weight:700;font-size:16px">Emanet</p>${mail.paragraphs.map((t) => p(t)).join('')}${button}${(mail.after ?? []).map((t) => p(t, true)).join('')}<p style="margin:32px 0 0;font-size:12px;color:#5c5a60">${esc(FOOTER)} · <a href="https://emanet.dev/gizlilik" style="color:#5c5a60">Gizlilik</a></p></div></body></html>`;
 }
 
 export function mailer(env: Env): Send {

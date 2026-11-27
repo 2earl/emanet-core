@@ -2,7 +2,7 @@ import { exports } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { partnerByOrg } from '../src/cases';
 import { renderContract } from '../src/contract';
-import type { ControlApi, PartnerApi } from '../src/index';
+import type { ControlApi, PartnerApi, PublicApi } from '../src/index';
 import type { Mail } from '../src/mail';
 import {
   addDocument,
@@ -115,7 +115,7 @@ const PROVIDER = {
   vkn: '0123456789',
   mersis: '0012345678900015',
   kep: '2earl@hs01.kep.tr',
-  email: 'legal@2earl.com',
+  email: 'iletisim@emanet.dev',
 };
 
 describe('onboarding', () => {
@@ -530,6 +530,16 @@ describe('onboarding', () => {
       .prepare(`SELECT actor, detail FROM audit_events WHERE action = 'staff.viewed'`)
       .first<{ actor: string; detail: string }>();
     expect(row).toEqual({ actor: 'staff:staff-1', detail: '{"what":"document d-1"}' });
+  });
+
+  it('tells the public site 2earl’s company details, once set', async () => {
+    const pub = exports.PublicApi as unknown as PublicApi;
+    expect(unwrap(await pub.company())).toMatchObject({
+      name: PROVIDER.name,
+      mersis: PROVIDER.mersis,
+    });
+    await db().prepare('DELETE FROM provider_details').run();
+    expect(unwrap(await pub.company())).toBeNull();
   });
 
   it('is reachable over the entrypoints', async () => {
