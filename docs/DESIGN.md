@@ -255,8 +255,9 @@ field_definitions   id, scope (global | partner:<id>), entity (vehicle | case | 
   definitions in force.
 - Forms, CSV templates and the API's JSON Schema (`GET /v1/schema`) are generated from these
   definitions. Onboarding a partner with new fields is configuration in Y, not a migration.
-- Fields marked `pii` are encrypted at rest. Nothing reaches agents unless its visibility is
-  `agent_after_claim`.
+- Fields marked `pii` are sealed with AES-256-GCM before they reach the database (`src/pii.ts`,
+  key `PII_KEY`, made once by the deploy workflow) and opened only after the audience filter.
+  Nothing reaches agents unless its visibility is `agent_after_claim`.
 
 ### 4.5 Agents
 ```
@@ -394,22 +395,36 @@ A new version applies to companies that accept after it ships; signed text never
 
 ## 6. Emanet Saha (Z): agents
 
-**Joining (KYC)**
-1. Sign up through login (email code, Google or passkey). Phone verified by SMS.
-2. Identity: NFC read of the T.C. ID card's chip plus a liveness selfie matched to the chip photo.
-   NFC is the method the central bank now prefers for remote identity checks by payment
-   institutions [Kesin]; we adopt it as a benchmark. Use a vendor; we never store raw biometric
-   templates.
-3. IBAN must be in the agent's own name, checked against the chip's name. The method depends on
-   the bank: a name check through our bank's API if it offers one, otherwise a one-off test
-   transfer with a code the agent reads back. [Tahmin]
-4. Criminal record: an e-Devlet barcoded *adli sicil* certificate, verified by its barcode. It is
-   special-category data under KVKK, so it needs a legal basis and short retention.
-5. Tax profile: individual (we document payment with a *gider pusulası*, and the bank statement can
-   stand in for it when we pay by bank) [Kesin], sole trader or company (they invoice us).
-   Withholding rates come from the accountant. [Tahmin]
-6. Training, a short test on the rules of conduct, then acceptance of the agent agreement. After
-   that an admin approves the agent in Y.
+**Joining (KYC)** (`src/kyc.ts`, `src/agents.ts`)
+
+One person, one account: the T.C. kimlik no (kept only as a keyed hash), the email address and
+the phone number each belong to a single agent (unique in the database).
+
+On the web, as built:
+1. Sign up through login (email code, Google or passkey).
+2. **Email**: the agent proves an address with a six-digit code mailed from Emanet (15 minutes,
+   five tries, one address per agent).
+3. **Identity**: name as on the ID card, T.C. kimlik no and birth year. The number's check digits
+   are verified, and the population registry's public service (NVİ KPS, `TCKimlikNoDogrula`) is
+   asked whether number, name and birth year belong together. A clear "no" refuses the
+   application; no answer (the service has no contract and isn't always reachable from data
+   centres) leaves the check to staff. The number itself is never stored.
+4. **Video call**: staff see the person holding their ID card, and record it (`video_call`).
+5. **IBAN** in the agent's own name, checked by staff (bank name check or a test transfer).
+6. Rules of conduct accepted; then an owner or admin activates the agent. Activation is refused
+   without the application, the proved email and the ID number.
+
+Next, not built:
+- **Phone by SMS**: a code to the mobile number, once an SMS provider is chosen (a Turkish
+  provider with an İYS-compliant sender name). `agents.phone_verified_at` and the `phone` KYC kind
+  are there for it; until then the number is confirmed on the video call.
+- **ID card chip (NFC) and liveness**: reading the chip needs a native app (browsers can't talk to
+  it), through a vendor; `id_nfc` and `liveness` KYC kinds are there for it. It is the method the
+  central bank prefers for remote identity checks [Kesin]; we never store biometric templates.
+- **Criminal record**: an e-Devlet barcoded *adli sicil* certificate, verified by its barcode.
+  Special-category data under KVKK: needs a legal basis and short retention.
+- Tax profile: individual (we document payment with a *gider pusulası*) [Kesin], sole trader or
+  company (they invoice us). Withholding rates come from the accountant. [Tahmin]
 
 **Searching**
 - Map and list of open hunts near the agent: plate, make, model, colour, rough area (district or
@@ -517,12 +532,25 @@ must follow this structure.
 - Debtor names and debt amounts are not needed at all; X doesn't ask for them.
 - Addresses are seen by the claiming agent only, for the claim's lifetime.
 
-**Retention**
+**Retention** (`src/privacy.ts`, `redactClosedCasePlaces`)
 - Thirty days after a case closes, its places lose their street address, coordinates, note and
-  custom fields (cron, `redactClosedCasePlaces`); district and city stay for the partner's reports.
-- Evidence is kept as long as the partner contract requires, plus the statutory period for
-  invoices.
-- KYC evidence is deleted after verification; the results stay.
+  custom fields; district and city stay for the partner's reports.
+- Photos of a claim that delivered nothing are deleted after 30 days; photos of a delivery, and a
+  partner's documents, after the retention period for commercial records (setting, ten years);
+  documents of a company that never became a partner after 90 days.
+- An agent's deleted account: profile, ID hash, email and phone go at once, and the photos of
+  every claim that delivered nothing. Payouts and the books stay (VUK 253, TTK 82).
+
+**Requests** (KVKK art. 11, 13)
+- Emanet Merkez → Privacy: staff search by plate, chassis number, agent or email address and see
+  everything held: cases and their addresses, photos (and whether each shows a vehicle or is a
+  document that can name people), sightings, onboarding documents.
+- From there: delete a photo or a document, erase a closed case's addresses now. Each needs a
+  reason and a fresh second factor, and is audited. Files are deleted from R2 by Emanet Merkez's
+  cron (it holds the buckets) and reported back; the database row stays without its file.
+- A register of requests with their thirty-day limit; overdue ones show on the System page.
+- For debtor data the partner is the controller: a debtor's request goes to the partner, and we
+  act on the partner's instruction.
 
 **Biometrics**: the liveness selfie is special-category data (KVKK art. 6). Process it with
 explicit consent or another art. 6 basis, through a vendor, and keep no templates. [Kesin that
@@ -580,6 +608,26 @@ Still open:
 - Pilot partner: one bank or asset management company, to shape fields and the contract.
 - Lawyer: the outsourcing contract (BDDK), KVKK documents, and whether 112 is the right line.
 - Accountant: withholding on agent payments; e-Fatura integrator.
+
+---
+
+## 12. Operations: logs, traces, alerts
+
+- **Cloudflare**: Workers Logs, traces (10 % sampled) and Issues are on for every Emanet Worker.
+  Invocation logs stay off; the code logs one structured line per request or job: route pattern,
+  status, duration, error name. Never a plate, an address or a person. Logs and traces are kept
+  seven days by Cloudflare; without a Customer Metadata Boundary they may be stored outside the
+  EU, which is why they carry no personal data.
+- **Errors**: every app reports an unhandled error to the core (`reportError`: its route pattern
+  and the error's name). The core's cron records a failed job the same way, and when each job
+  last ran (`ops_heartbeats`).
+- **Alerts**: staff get an email, at most hourly, listing new errors by source and name.
+- **Dashboard**: Emanet Merkez → System: jobs and when they last ran, errors of the last 30 days,
+  queues (oldest review, files waiting to be deleted, privacy requests and overdue ones).
+- **Webhooks**: a webhook switched off after 20 failures mails the partner's operations contact
+  and shows on the System page. Deliveries are durable without a queue: every event is a row in
+  the delivery log before it is sent, retried with backoff for a day, and readable from the API
+  meanwhile.
 
 ---
 

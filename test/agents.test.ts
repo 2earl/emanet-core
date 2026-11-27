@@ -14,20 +14,36 @@ import { exportUser, deleteUser } from '../src/account-events';
 import { verifyAgentIban } from '../src/control';
 import { upsertCase } from '../src/cases';
 import { addEvidence, claimVehicle, recordSighting, registerAgent } from '../src/claims';
-import { activeAgent, activePartner, caseInput, db, payoutRule, T0, unwrap } from './helpers';
+import {
+  activeAgent,
+  activePartner,
+  caseInput,
+  db,
+  payoutRule,
+  randomMobile,
+  randomTckn,
+  T0,
+  unwrap,
+  verifiedEmail,
+} from './helpers';
 
 // A valid Turkish IBAN (mod-97 check digits 33).
 const IBAN = 'TR33 0006 1005 1978 6457 8413 26';
+// One number for the whole file: every test's agent is deleted or uses its own.
+let PHONE = randomMobile();
 const profile = (overrides: Partial<ProfileInput> = {}): ProfileInput => ({
   legalName: '  Ayşe   Yılmaz ',
   city: 'İzmir',
-  phone: '0532 123 45 67',
+  phone: PHONE,
   iban: IBAN,
   taxProfile: 'individual',
+  tckn: randomTckn(),
+  birthYear: 1990,
   ...overrides,
 });
 
 async function newAgent(): Promise<string> {
+  PHONE = randomMobile();
   const id = crypto.randomUUID();
   await registerAgent(db(), id, T0);
   return id;
@@ -62,15 +78,22 @@ describe('joining', () => {
     expect(unwrap(await agentProfile(db(), agent))).toMatchObject({
       status: 'applied',
       legal_name: 'Ayşe Yılmaz',
-      phone: '+905321234567',
+      phone: PHONE,
       iban: 'TR330006100519786457841326',
       iban_verified: false,
+      id_given: true,
+      email: null,
       tax_profile: 'individual',
       vkn: null,
     });
     expect(await submitApplication(db(), agent, '2020-01-01', T0)).toMatchObject({
       error: 'terms_changed',
     });
+    // Not without a proved email address.
+    expect(await submitApplication(db(), agent, TERMS_VERSION, T0 + 1)).toMatchObject({
+      error: 'email_not_verified',
+    });
+    await verifiedEmail(agent);
     unwrap(await submitApplication(db(), agent, TERMS_VERSION, T0 + 1));
     expect(unwrap(await agentProfile(db(), agent))).toMatchObject({
       status: 'kyc_pending',
@@ -89,12 +112,27 @@ describe('joining', () => {
       .prepare(`UPDATE agents SET status = 'active', iban_verified_at = ? WHERE user_id = ?`)
       .bind(T0, agent)
       .run();
-    expect(await updateProfile(db(), agent, profile({ city: 'Ankara' }), T0)).toMatchObject({
+    expect(
+      await updateProfile(db(), agent, profile({ city: 'Ankara', tckn: null }), T0),
+    ).toMatchObject({ error: 'profile_locked' });
+    // Nor the ID number.
+    expect(await updateProfile(db(), agent, profile(), T0)).toMatchObject({
       error: 'profile_locked',
     });
-    unwrap(await updateProfile(db(), agent, profile({ phone: '05551112233' }), T0));
+    unwrap(await updateProfile(db(), agent, profile({ phone: randomMobile(), tckn: null }), T0));
     expect(unwrap(await agentProfile(db(), agent)).iban_verified).toBe(true);
-    unwrap(await updateProfile(db(), agent, profile({ iban: 'TR320010009999901234567890' }), T0));
+    unwrap(
+      await updateProfile(
+        db(),
+        agent,
+        profile({
+          iban: 'TR320010009999901234567890',
+          tckn: null,
+          phone: unwrap(await agentProfile(db(), agent)).phone ?? '',
+        }),
+        T0,
+      ),
+    );
     expect(unwrap(await agentProfile(db(), agent)).iban_verified).toBe(false);
   });
 
@@ -102,13 +140,15 @@ describe('joining', () => {
     const agent = await newAgent();
     unwrap(await updateProfile(db(), agent, profile(), T0));
     const exported = (await exportUser(db(), agent)) as { agent: Record<string, unknown> };
-    expect(exported.agent).toMatchObject({ phone: '+905321234567', legal_name: 'Ayşe Yılmaz' });
+    expect(exported.agent).toMatchObject({ phone: PHONE, legal_name: 'Ayşe Yılmaz' });
     await deleteUser(db(), agent, T0);
     expect(unwrap(await agentProfile(db(), agent))).toMatchObject({
       status: 'banned',
       legal_name: null,
       phone: null,
       iban: null,
+      id_given: false,
+      email: null,
     });
   });
 });

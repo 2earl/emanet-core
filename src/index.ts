@@ -22,7 +22,6 @@ import {
 } from './agents';
 import {
   confirmCases,
-  createPartner,
   expireCases,
   getCase,
   redactClosedCasePlaces,
@@ -34,7 +33,6 @@ import {
   withdrawCase,
   type CaseInput,
   type CaseStatus,
-  type NewPartner,
   type Partner,
 } from './cases';
 import {
@@ -82,7 +80,28 @@ import {
   uninvoiced,
   updatePartner,
 } from './control';
-import { mailer, type Send } from './mail';
+import {
+  confirmEmailCode,
+  kycChecks,
+  kycStatement,
+  nviRegistry,
+  noRegistry,
+  requestEmailCode,
+} from './kyc';
+import { mailer, webhookDisabledMail, type MailLocale, type Send } from './mail';
+import { alertOps, heartbeat, opsOverview, recordOps, type OpsSource } from './ops';
+import {
+  closeRequest,
+  eraseDocument,
+  eraseEvidence,
+  filesDue,
+  filesErased,
+  inventory,
+  listRequests,
+  openRequest,
+  redactCasePlaces,
+  scheduleRetention,
+} from './privacy';
 import {
   addDocument,
   approve,
@@ -128,6 +147,16 @@ const INTEGRATION_ACTIONS: readonly string[] = [
   'webhook_deleted',
   'webhook_enabled',
 ];
+
+/** An app tells the core something failed: a route's pattern and an error's name, never data. */
+async function reportOps(
+  env: Env,
+  source: OpsSource,
+  event: string,
+  detail: string,
+): Promise<void> {
+  await recordOps(env.DB, source, 'error', event, detail, now());
+}
 
 async function activePartner(db: D1Database, orgId: string): Promise<Result<Partner>> {
   const partner = await partnerByOrg(db, orgId);
@@ -333,6 +362,38 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     return ok(null);
   }
 
+  async reportError(event: string, detail: string) {
+    await reportOps(this.env, 'kurumsal', event, detail);
+  }
+
+  /**
+   * A webhook was switched off after failing repeatedly: the company's operations contact is
+   * told, in its language, and staff see it on the System page. Events keep being recorded and
+   * stay readable from the API meanwhile.
+   */
+  async webhookDisabled(orgId: string, host: string) {
+    const row = await this.env.DB.prepare(
+      `SELECT p.legal_name, p.contact_email, o.locale FROM partners p
+       LEFT JOIN onboardings o ON o.id = p.onboarding_id WHERE p.org_id = ?`,
+    )
+      .bind(orgId)
+      .first<{ legal_name: string; contact_email: string | null; locale: MailLocale | null }>();
+    if (!row) return fail('not_a_partner');
+    const name = typeof host === 'string' ? host.replace(/[^A-Za-z0-9.-]/g, '').slice(0, 120) : '';
+    await recordOps(this.env.DB, 'kurumsal', 'warn', 'webhook.disabled', name, now());
+    if (!row.contact_email) return ok({ emailed: false });
+    const emailed = await this.send(
+      webhookDisabledMail(
+        row.locale ?? 'tr',
+        row.contact_email,
+        row.legal_name,
+        name,
+        `${this.env.KURUMSAL_ORIGIN}/o/${orgId}/webhooks`,
+      ),
+    );
+    return ok({ emailed });
+  }
+
   /** How many of the partner's cases are in each status. */
   async counts(orgId: string) {
     const partner = await partnerByOrg(this.env.DB, orgId);
@@ -407,7 +468,27 @@ export class FieldApi extends WorkerEntrypoint<Env> {
   }
 
   async updateProfile(agentId: string, input: ProfileInput) {
-    return updateProfile(this.env.DB, agentId, input, now());
+    const url: string = this.env.ID_REGISTRY_URL;
+    return updateProfile(
+      this.env.DB,
+      agentId,
+      input,
+      now(),
+      url === '' ? noRegistry : nviRegistry(url),
+    );
+  }
+
+  /** Mails a code to the address the agent wants to prove is theirs. */
+  async requestEmailCode(agentId: string, input: { email: string; locale: MailLocale }) {
+    return requestEmailCode(this.env.DB, mailer(this.env), agentId, input, now());
+  }
+
+  async confirmEmailCode(agentId: string, code: string) {
+    return confirmEmailCode(this.env.DB, agentId, code, now());
+  }
+
+  async reportError(event: string, detail: string) {
+    await reportOps(this.env, 'saha', event, detail);
   }
 
   async submit(agentId: string, termsVersion: string) {
@@ -547,10 +628,6 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   // ---- Partners ----
 
-  async createPartner(staffId: string, input: NewPartner) {
-    return createPartner(this.env.DB, input, staffId, now());
-  }
-
   async setPartnerStatus(staffId: string, partnerId: string, status: Partner['status']) {
     return setPartnerStatus(this.env.DB, partnerId, status, staffId, now());
   }
@@ -668,6 +745,107 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return markPayoutSent(this.env.DB, staffId, payoutId, bankRef, now());
   }
 
+  // ---- Agents' identity (docs/DESIGN.md §6) ----
+
+  async kycChecks(agentId: string) {
+    return ok(await kycChecks(this.env.DB, agentId));
+  }
+
+  /** Staff saw the person and their ID card on a video call. */
+  async recordVideoCall(staffId: string, agentId: string, passed: boolean) {
+    const at = now();
+    const agent = await this.env.DB.prepare('SELECT 1 AS yes FROM agents WHERE user_id = ?')
+      .bind(agentId)
+      .first();
+    if (!agent) return fail('not_found');
+    await this.env.DB.batch([
+      kycStatement(
+        this.env.DB,
+        agentId,
+        'video_call',
+        'staff',
+        passed ? 'passed' : 'failed',
+        at,
+        staffId,
+      ),
+      auditStatement(this.env.DB, at, `staff:${staffId}`, 'agent.video_call', `agent:${agentId}`, {
+        passed,
+      }),
+    ]);
+    return ok(null);
+  }
+
+  // ---- Personal data on request (docs/DESIGN.md §8) ----
+
+  /** Everything held for a plate, a chassis number, an agent or an email address. The search is recorded. */
+  async privacySearch(staffId: string, term: string) {
+    const result = await inventory(this.env.DB, term);
+    if (result.ok) {
+      await auditStatement(this.env.DB, now(), `staff:${staffId}`, 'staff.viewed', 'privacy', {
+        found:
+          Boolean(result.value.vehicle ?? result.value.agent) ||
+          result.value.onboardings.length > 0,
+      }).run();
+    }
+    return result;
+  }
+
+  async eraseEvidence(staffId: string, evidenceId: string, reason: string) {
+    return eraseEvidence(this.env.DB, staffId, evidenceId, reason, now());
+  }
+
+  async eraseDocument(staffId: string, documentId: string, reason: string) {
+    return eraseDocument(this.env.DB, staffId, documentId, reason, now());
+  }
+
+  async redactCasePlaces(staffId: string, caseId: string, reason: string) {
+    return redactCasePlaces(this.env.DB, staffId, caseId, reason, now());
+  }
+
+  async privacyRequests() {
+    return ok(await listRequests(this.env.DB));
+  }
+
+  async openPrivacyRequest(staffId: string, input: Parameters<typeof openRequest>[2]) {
+    return openRequest(this.env.DB, staffId, input, now());
+  }
+
+  async closePrivacyRequest(
+    staffId: string,
+    requestId: string,
+    input: { status: string; outcome: string },
+  ) {
+    return closeRequest(this.env.DB, staffId, requestId, input, now());
+  }
+
+  /** Files Emanet Merkez's cron deletes from R2, and its report that it did. */
+  async filesDue(limit = 100) {
+    return ok(await filesDue(this.env.DB, limit));
+  }
+
+  async filesErased(refs: string[]) {
+    return ok({ erased: await filesErased(this.env.DB, refs, now()) });
+  }
+
+  // ---- Operations (docs/DESIGN.md §12) ----
+
+  async ops() {
+    return ok(await opsOverview(this.env.DB, now()));
+  }
+
+  async reportError(event: string, detail: string) {
+    await reportOps(this.env, 'merkez', event, detail);
+  }
+
+  async heartbeat(name: string, error: string | null) {
+    await heartbeat(
+      this.env.DB,
+      `merkez.${name.replace(/[^a-z_]/g, '').slice(0, 30)}`,
+      error,
+      now(),
+    );
+  }
+
   async trialBalance() {
     return ok(await trialBalance(this.env.DB));
   }
@@ -746,6 +924,10 @@ export class ControlApi extends WorkerEntrypoint<Env> {
  * 1524's company details). Only what 2earl publishes anyway; null until staff have set it.
  */
 export class PublicApi extends WorkerEntrypoint<Env> {
+  async reportError(event: string, detail: string) {
+    await reportOps(this.env, 'web', event, detail);
+  }
+
   async company() {
     return ok(await provider(this.env.DB));
   }
@@ -774,22 +956,34 @@ export default {
 
   scheduled(_controller, env, ctx): void {
     const at = now();
-    // Each job on its own: one that fails doesn't stop the ones after it. Only the job's name and
-    // the error's name are logged, never data.
+    // Each job on its own: one that fails doesn't stop the ones after it, is recorded for the
+    // System page and the alert email, and the rest still run.
     const jobs: [string, () => Promise<unknown>][] = [
       ['expireClaims', () => expireClaims(env.DB, at)],
       ['expireCases', () => expireCases(env.DB, at)],
       ['onboarding', () => remindAndExpire(env.DB, mailer(env), origins(env), at)],
       ['notices', () => sendNotices(env.DB, mailer(env), env.KURUMSAL_ORIGIN, at)],
       ['retention', () => redactClosedCasePlaces(env.DB, at)],
+      ['fileRetention', () => scheduleRetention(env.DB, at)],
+      ['alerts', () => alertOps(env.DB, mailer(env), env.STAFF_EMAIL, env.MERKEZ_ORIGIN, at)],
     ];
     ctx.waitUntil(
       (async () => {
         for (const [name, job] of jobs) {
           try {
             await job();
+            await heartbeat(env.DB, `core.${name}`, null, at);
           } catch (error) {
-            console.error(`cron ${name} failed`, error instanceof Error ? error.name : 'error');
+            // The job's name and the error's name; never data.
+            const what = error instanceof Error ? error.name : 'error';
+            try {
+              await recordOps(env.DB, 'core', 'error', `cron.${name}`, what, at);
+              await heartbeat(env.DB, `core.${name}`, what, at);
+            } catch {
+              console.error(
+                JSON.stringify({ level: 'error', event: `cron.${name}`, detail: what }),
+              );
+            }
           }
         }
       })(),

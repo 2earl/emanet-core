@@ -11,6 +11,7 @@
  */
 import { auditStatement } from './audit';
 import { fieldsFor, visibleAttributes } from './fields';
+import { openAttributes } from './pii';
 import { payoutFor, type PayoutRule } from './pricing';
 import { fail, newId, ok, type Result } from './result';
 import { readSettings } from './settings';
@@ -62,7 +63,8 @@ export function orphanReviewsStatement(db: D1Database, at: number): D1PreparedSt
  * Staff move an agent through KYC, or suspend and ban. Suspension ends the agent's claims.
  *
  * An agent becomes active only from the identity check (or back from a suspension), and only with
- * the application they sent: the rules accepted, and a name, phone and IBAN to check them against.
+ * the application they sent: the rules accepted, a proved email, an ID number on record, and a
+ * name, phone and IBAN to check them against.
  * Staff can't skip the application by setting the status directly.
  */
 export async function setAgentStatus(
@@ -78,7 +80,7 @@ export async function setAgentStatus(
   if (!cause) return fail('invalid_reason');
   const current = await db
     .prepare(
-      'SELECT status, legal_name, phone, iban, terms_accepted_at FROM agents WHERE user_id = ?',
+      'SELECT status, legal_name, phone, iban, terms_accepted_at, email_verified_at, tckn_hash FROM agents WHERE user_id = ?',
     )
     .bind(agentId)
     .first<{
@@ -87,6 +89,8 @@ export async function setAgentStatus(
       phone: string | null;
       iban: string | null;
       terms_accepted_at: number | null;
+      email_verified_at: number | null;
+      tckn_hash: string | null;
     }>();
   if (!current) return fail('not_found');
   if (status === 'active') {
@@ -97,7 +101,9 @@ export async function setAgentStatus(
       current.terms_accepted_at === null ||
       !current.legal_name ||
       !current.phone ||
-      !current.iban
+      !current.iban ||
+      current.email_verified_at === null ||
+      current.tckn_hash === null
     ) {
       return fail('agent_not_ready', 'application');
     }
@@ -443,10 +449,8 @@ export async function claimDetails(
       lat: row.lat,
       lng: row.lng,
       note: row.note,
-      attributes: visibleAttributes(
-        fields,
-        JSON.parse(row.attributes) as Record<string, unknown>,
-        'agent',
+      attributes: await openAttributes(
+        visibleAttributes(fields, JSON.parse(row.attributes) as Record<string, unknown>, 'agent'),
       ),
     });
   }

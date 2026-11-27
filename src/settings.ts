@@ -17,6 +17,8 @@ export const SETTING_DEFAULTS = {
   withholding_individual_bp: 0,
   withholding_sole_trader_bp: 0,
   withholding_company_bp: 0,
+  /** How long the photos of a delivery, and a partner's documents, are kept (TTK 82: ten years). */
+  evidence_retention_days: 3650,
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
@@ -35,6 +37,7 @@ export const SETTING_LIMITS: Record<SettingKey, readonly [min: number, max: numb
   withholding_individual_bp: [0, 5000],
   withholding_sole_trader_bp: [0, 5000],
   withholding_company_bp: [0, 5000],
+  evidence_retention_days: [365, 7300],
 };
 
 export function settingAllowed(key: string, value: unknown): key is SettingKey {
