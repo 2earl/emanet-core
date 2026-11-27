@@ -340,7 +340,7 @@ invited | in_progress ─(14 days)→ expired ─(staff send a new link)→ invi
 
 The agreement (`src/contract.ts`, version `CONTRACT_VERSION`) is a draft for a lawyer to review.
 2earl's own company details (unvan, address, tax office, VKN, MERSİS, KEP) are configuration: staff set them in Y → Settings (`provider_details`, audited). Until then the agreement shows placeholders and can't be accepted (`provider_incomplete`).
-A new version applies to companies that accept after it ships; signed text never changes.
+A new version applies to companies that accept after it ships; signed text never changes. Every acceptance is also kept in `onboarding_acceptances`, append-only by trigger, so a send-back never loses what was accepted; documents are append-only too. Staff opening a document or evidence is audited (`staff.viewed`).
 
 **Vehicles**
 - Add a vehicle by form, by CSV/XLSX upload (dry-run preview, row-level errors, idempotent on

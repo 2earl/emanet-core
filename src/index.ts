@@ -10,6 +10,7 @@
  * that person may do here: partner status, agent status, claim ownership, approvals.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
+import { auditStatement } from './audit';
 import { deleteOrganization, deleteUser, exportUser } from './account-events';
 import {
   agentProfile,
@@ -380,6 +381,19 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   protected send: Send = mailer(this.env);
 
   // ---- Onboarding (docs/DESIGN.md §5) ----
+
+  /**
+   * A staff member opened a company's document or an agent's evidence: personal data, so every
+   * look is recorded (KVKK; docs/DESIGN.md §8).
+   */
+  async recordView(staffId: string, subject: string, what: string) {
+    if (!/^(onboarding|claim|review):[A-Za-z0-9_-]{1,64}$/.test(subject))
+      return fail('invalid_subject');
+    await auditStatement(this.env.DB, now(), `staff:${staffId}`, 'staff.viewed', subject, {
+      what: what.slice(0, 100),
+    }).run();
+    return ok(null);
+  }
 
   /** 2earl's own company details, as the agreement names it. */
   async provider() {

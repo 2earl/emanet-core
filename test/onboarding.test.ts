@@ -360,6 +360,48 @@ describe('onboarding', () => {
     unwrap(await approve(db(), box.send, ORIGINS, 'staff-2', id, T0 + 600));
   });
 
+  it('keeps every acceptance, even after a send-back, and never changes it', async () => {
+    const box = outbox();
+    const { id, user } = await ready(box);
+    unwrap(await signNow(id, user, box));
+    unwrap(await reopen(db(), box.send, ORIGINS, 'staff-2', id, 'Adres eksik', T0 + 300));
+    unwrap(
+      await saveDetails(
+        db(),
+        id,
+        user,
+        { ...DETAILS, address: 'Levent Mah., Beşiktaş, İstanbul' },
+        T0 + 400,
+      ),
+    );
+    unwrap(await signNow(id, user, box, T0 + 500));
+    const staff = unwrap(await onboardingForStaff(db(), id));
+    expect(staff.acceptances).toHaveLength(2);
+    expect(staff.acceptances[0]?.contract_sha256).not.toBe(staff.acceptances[1]?.contract_sha256);
+    expect(staff.acceptances[1]?.contract_sha256).toBe(staff.contract_sha256);
+    await expect(
+      db().prepare("UPDATE onboarding_acceptances SET signer_name = 'x'").run(),
+    ).rejects.toThrow(/immutable/);
+    await expect(db().prepare('DELETE FROM onboarding_acceptances').run()).rejects.toThrow(
+      /immutable/,
+    );
+  });
+
+  it('records a refused acceptance nowhere', async () => {
+    const box = outbox();
+    const { id, user } = await ready(box);
+    unwrap(await signNow(id, user, box));
+    // A second acceptance of an already signed onboarding is refused and leaves no trace.
+    expect(await signNow(id, user, box, T0 + 260)).toMatchObject({ error: 'not_editable' });
+    const signed = await db()
+      .prepare(
+        `SELECT count(*) AS n FROM audit_events WHERE action = 'onboarding.signed' AND subject = ?`,
+      )
+      .bind(`onboarding:${id}`)
+      .first<{ n: number }>();
+    expect(signed?.n).toBe(1);
+  });
+
   it('cancels and rejects, with a reason', async () => {
     const box = outbox();
     const { id } = unwrap(await invite(db(), box.send, ORIGINS, 'staff-1', invitation(), T0));
@@ -476,6 +518,18 @@ describe('onboarding', () => {
     expect(a.sha256).toBe(b.sha256);
     expect(c.sha256).not.toBe(a.sha256);
     expect(a.text).not.toMatch(/\{\{/);
+  });
+
+  it('records staff looking at a company’s documents', async () => {
+    const control = exports.ControlApi as unknown as ControlApi;
+    unwrap(await control.recordView('staff-1', 'onboarding:abc', 'document d-1'));
+    expect(await control.recordView('staff-1', 'partner; DROP', 'x')).toMatchObject({
+      error: 'invalid_subject',
+    });
+    const row = await db()
+      .prepare(`SELECT actor, detail FROM audit_events WHERE action = 'staff.viewed'`)
+      .first<{ actor: string; detail: string }>();
+    expect(row).toEqual({ actor: 'staff:staff-1', detail: '{"what":"document d-1"}' });
   });
 
   it('is reachable over the entrypoints', async () => {
