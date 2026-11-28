@@ -920,6 +920,8 @@ export async function redactClosedCasePlaces(db: D1Database, at: number): Promis
        WHERE address != '' AND case_id IN (
          SELECT c.id FROM cases c WHERE c.status IN ('delivered', 'withdrawn', 'expired')
            AND c.updated_at <= ?
+           AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.released_at IS NULL
+                             AND h.subject_kind = 'case' AND h.subject_ref = c.id)
            AND EXISTS (SELECT 1 FROM case_places p WHERE p.case_id = c.id AND p.address != '')
          LIMIT 500)`,
     )

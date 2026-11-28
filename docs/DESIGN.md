@@ -783,3 +783,18 @@ same rules `approve` applies. Merkez shows it above the approve button. Once a d
 (`lateRequests`) emails `STAFF_EMAIL` how many requests to agents are past their limit and how many answers have waited
 for staff more than two days: counts only, nothing when there is nothing.
 
+
+`recordVideoCall(staffId, agentId, passed, activate)` records the call and changes no status by itself. With
+`activate` and a passed call on an application it runs the normal `setAgentStatus(active)`, so documents, open
+requests and sign-offs still apply, and it returns `{ activated, blocked }` so Merkez can say why an agent stays waiting.
+
+## 18. Legal holds (2026-11-28)
+
+A hold (`legal_holds`, `src/holds.ts`) names one agent, one case or one company onboarding and stops automatic
+deletion for it while a dispute or investigation is open. It holds back: the retention cron queueing that subject's
+files, the queue handing out files already queued for it (`filesDue`), the redaction of a held case's addresses, the
+destruction of a held agent's sealed archive, and the erasure of a held agent (staff get `legal_hold`; the identity
+provider's account-deleted event is logged as `privacy.erasure_held` and the account stays). A case hold also covers
+the photos of claims on that vehicle. Setting and lifting each need a reason and are audited (`hold.placed`,
+`hold.released`); the rows stay. A held erasure request stays open: staff answer it, citing the hold. After a hold
+is lifted the next cron run applies the retention rules again; an erasure refused by a hold is not redone on its own.
