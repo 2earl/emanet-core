@@ -22,10 +22,10 @@ describe('looking at the public apps from outside', () => {
       db(),
       list,
       (url) => {
-        if (url.startsWith('https://k.test'))
+        if (new URL(url).hostname === 'k.test')
           return Promise.resolve(new Response(null, { status: 502 }));
-        if (url.startsWith('https://s.test')) return Promise.reject(new Error('timeout'));
-        if (url.startsWith('https://m.test')) {
+        if (new URL(url).hostname === 's.test') return Promise.reject(new Error('timeout'));
+        if (new URL(url).hostname === 'm.test') {
           return Promise.resolve(
             new Response(null, { status: 302, headers: { Location: '/signin' } }),
           );
