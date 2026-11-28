@@ -31,6 +31,7 @@ import {
 import { checkPriceList, type PriceList } from './pricing';
 import { provider } from './provider';
 import { fail, newId, ok, type Result } from './result';
+import { readSettings } from './settings';
 
 export const INVITATION_TTL = 14 * 24 * 3600;
 /** Reminders after 3 and 7 days without the agreement accepted. */
@@ -265,7 +266,7 @@ export async function invite(
   if (open) return fail('already_invited', open.id);
   const id = newId();
   const secret = newSecret();
-  const expiresAt = at + INVITATION_TTL;
+  const expiresAt = at + (await readSettings(db)).invitation_days * 24 * 3600;
   await db.batch([
     db
       .prepare(
@@ -333,7 +334,7 @@ export async function resend(
     if (other) return fail('already_invited');
   }
   const secret = newSecret();
-  const expiresAt = at + INVITATION_TTL;
+  const expiresAt = at + (await readSettings(db)).invitation_days * 24 * 3600;
   await db.batch([
     db
       .prepare(

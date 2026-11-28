@@ -521,6 +521,38 @@ must follow this structure.
 
 ---
 
+### 7.x Settings (2026-11-28)
+
+Every number that shapes a flow is a setting in `src/settings.ts`, with a default, a range, a unit
+and a group. Merkez shows them grouped, each with what it does, its default and range, and who
+changed it last; a change is recorded in the audit log with the old and new value, and a setting
+can be put back to its default. Legal ceilings are the top of the range and cannot be raised from
+the page: thirty days for a data subject's request (KVKK 13), seven days for an invoice (VUK 231/5).
+
+| Group | Settings |
+| --- | --- |
+| Searching | `claim_hours`, `reporting_hours`, `cooldown_hours`, `max_active_claims`, `max_evidence_per_claim` |
+| Reviews | `review_sla_hours`, `identity_sla_hours`, `review_checklist` |
+| Agents | `agent_sla_hours`, `strike_limit`, `email_code_minutes`, `agent_mail` |
+| Partners | `invitation_days`, `onboarding_sla_hours`, `expiry_warning_days`, `webhook_disable_after`, `max_webhooks` |
+| Money | `kdv_bp`, `invoice_days`, `dual_approval_kurus`, three withholding rates |
+| Privacy | `evidence_retention_days`, `failed_claim_evidence_days`, `place_retention_days`, `abandoned_onboarding_days`, `privacy_request_days` |
+| Operations | `alert_interval_minutes`, `ops_keep_days` |
+
+### 7.y Procedures (2026-11-28)
+
+- **Delivery review.** Staff confirm a delivery only after ticking each point of a checklist
+  (`DELIVERY_CHECKS`: the plate in the photos is the case's plate; the custodian's receipt names
+  this vehicle; the place and time are plausible; the photos are originals). What was ticked is kept
+  on the claim and in the audit log. The checklist is a setting.
+- **Strikes.** A refused delivery can cost a strike. At `strike_limit` the agent is suspended by
+  the system and their open claims end; staff decide whether to reinstate.
+- **Applications.** Staff approve, refuse, or send an application back with what to correct; the
+  applicant reads the note, corrects and sends again.
+- **Telling the agent.** Every decision on an agent is mailed to the address they proved, in the
+  language they applied in: application received, approved, sent back, suspended, closed,
+  reinstated, delivery confirmed, delivery refused (with the reason), payout sent.
+
 ## 8. Privacy (KVKK) design
 
 **Roles**
@@ -630,6 +662,14 @@ Still open:
   meanwhile.
 
 ---
+
+### Service levels
+
+Each queue staff work through has a time limit: reported deliveries, vehicle-identity questions,
+agent applications, signed agreements, data subjects' requests, and delivered cases not yet
+invoiced. Merkez's Today page shows each queue with its oldest item, what is due soon and what is
+overdue. A queue with overdue work is recorded once a day as an error (`sla.<queue>`, counts only),
+so it reaches staff through the alert email like a failing job.
 
 ## Sources
 

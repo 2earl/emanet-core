@@ -81,7 +81,7 @@ export async function listAgents(db: D1Database, status: string | null): Promise
   const { results } = await db
     .prepare(
       `SELECT a.user_id, a.status, a.legal_name, a.city, a.phone, a.iban, a.tax_profile, a.vkn,
-         a.strikes, a.created_at, a.submitted_at, a.terms_version, a.birth_year,
+         a.strikes, a.created_at, a.submitted_at, a.terms_version, a.birth_year, a.review_note,
          CASE WHEN a.email_verified_at IS NOT NULL THEN a.email END AS email,
          a.tckn_hash IS NOT NULL AS id_given,
          a.iban_verified_at IS NOT NULL AS iban_verified,

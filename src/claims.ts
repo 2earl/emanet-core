@@ -132,6 +132,33 @@ export async function setAgentStatus(
   return results[0]?.meta.changes === 1 ? ok(null) : fail('conflict_retry');
 }
 
+/**
+ * Sends a submitted application back to the applicant with what to correct. They read the note,
+ * change their details and send it again; nothing they entered is lost.
+ */
+export async function returnApplication(
+  db: D1Database,
+  agentId: string,
+  staffId: string,
+  reason: string,
+  at: number,
+): Promise<Result<null>> {
+  const note = typeof reason === 'string' ? reason.trim().slice(0, 300) : '';
+  if (!note) return fail('invalid_reason');
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE agents SET status = 'applied', review_note = ?, updated_at = ?
+         WHERE user_id = ? AND status = 'kyc_pending'`,
+      )
+      .bind(note, at, agentId),
+    auditStatement(db, at, `staff:${staffId}`, 'agent.returned', `agent:${agentId}`, {
+      reason: note,
+    }),
+  ]);
+  return results[0]?.meta.changes === 1 ? ok(null) : fail('agent_not_ready');
+}
+
 async function agentOf(
   db: D1Database,
   agentId: string,
@@ -573,7 +600,8 @@ export async function addEvidence(
     .prepare('SELECT count(*) AS n FROM evidence WHERE claim_id = ?')
     .bind(claimId)
     .first<{ n: number }>();
-  if ((held?.n ?? 0) >= MAX_EVIDENCE_PER_CLAIM) return fail('too_much_evidence');
+  if ((held?.n ?? 0) >= (await readSettings(db)).max_evidence_per_claim)
+    return fail('too_much_evidence');
   const id = newId();
   try {
     await db.batch([

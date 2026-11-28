@@ -118,7 +118,7 @@ export async function scheduleRetention(db: D1Database, at: number): Promise<num
            AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = e.file_ref)
          LIMIT 500`,
       )
-      .bind(at, at - FAILED_CLAIM_EVIDENCE_DAYS * DAY, at - kept),
+      .bind(at, at - settings.failed_claim_evidence_days * DAY, at - kept),
     db
       .prepare(
         `INSERT INTO erased_files (file_ref, bucket, record_id, reason, requested_by, requested_at)
@@ -129,7 +129,7 @@ export async function scheduleRetention(db: D1Database, at: number): Promise<num
            AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = d.file_ref)
          LIMIT 500`,
       )
-      .bind(at, at - ABANDONED_ONBOARDING_DAYS * DAY, at - kept),
+      .bind(at, at - settings.abandoned_onboarding_days * DAY, at - kept),
   ]);
   return results.reduce((sum, result) => sum + result.meta.changes, 0);
 }
@@ -442,7 +442,7 @@ export async function openRequest(
       ? Math.floor(input.receivedAt)
       : at;
   const id = newId();
-  const due = received + REQUEST_DAYS * DAY;
+  const due = received + (await readSettings(db)).privacy_request_days * DAY;
   await db.batch([
     db
       .prepare(

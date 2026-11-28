@@ -47,6 +47,7 @@ import {
   setAgentStatus,
   type AgentStatus,
   type EvidenceKind,
+  returnApplication,
 } from './claims';
 import {
   checkDefinition,
@@ -89,7 +90,15 @@ import {
   requestEmailCode,
 } from './kyc';
 import { mailer, webhookDisabledMail, type MailLocale, type Send } from './mail';
-import { alertOps, heartbeat, opsOverview, recordOps, type OpsSource } from './ops';
+import {
+  alertOps,
+  heartbeat,
+  opsOverview,
+  queues,
+  recordOps,
+  watchServiceLevels,
+  type OpsSource,
+} from './ops';
 import {
   closeRequest,
   eraseDocument,
@@ -138,7 +147,16 @@ import { sendNotices } from './notices';
 import { checkPayoutRule } from './pricing';
 import { provider, providerForStaff, setProvider } from './provider';
 import { fail, now, ok, type Result } from './result';
-import { readSettings, settingAllowed, writeSetting, type SettingKey } from './settings';
+import {
+  readSettings,
+  resetSetting,
+  SETTINGS,
+  settingAllowed,
+  settingsInfo,
+  writeSetting,
+  type SettingKey,
+} from './settings';
+import { claimPlate, notifyAgent } from './agent-notices';
 
 const INTEGRATION_ACTIONS: readonly string[] = [
   'key_created',
@@ -166,6 +184,14 @@ async function activePartner(db: D1Database, orgId: string): Promise<Result<Part
 }
 
 /** For emanet-partners. `orgId` is the login organization the signed-in person acts for. */
+/** What staff confirm before a delivery is accepted (Merkez shows each with its explanation). */
+export const DELIVERY_CHECKS = [
+  'plate_matches',
+  'custody_receipt',
+  'place_plausible',
+  'photos_original',
+] as const;
+
 function origins(env: Env): Origins {
   return { kurumsal: env.KURUMSAL_ORIGIN, merkez: env.MERKEZ_ORIGIN, staffEmail: env.STAFF_EMAIL };
 }
@@ -395,6 +421,15 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
   }
 
   /** How many of the partner's cases are in each status. */
+  /** The limits staff set for integrations. */
+  async limits() {
+    const settings = await readSettings(this.env.DB);
+    return ok({
+      webhook_disable_after: settings.webhook_disable_after,
+      max_webhooks: settings.max_webhooks,
+    });
+  }
+
   async counts(orgId: string) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
@@ -459,6 +494,9 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
 
 /** For emanet-field. `agentId` is the signed-in person's 2earl user ID. */
 export class FieldApi extends WorkerEntrypoint<Env> {
+  /** Tests replace this; everything else sends through the MAILER binding. */
+  protected send: Send = mailer(this.env);
+
   async register(agentId: string) {
     return registerAgent(this.env.DB, agentId, now());
   }
@@ -492,7 +530,15 @@ export class FieldApi extends WorkerEntrypoint<Env> {
   }
 
   async submit(agentId: string, termsVersion: string) {
-    return submitApplication(this.env.DB, agentId, termsVersion, now());
+    const result = await submitApplication(this.env.DB, agentId, termsVersion, now());
+    if (result.ok) {
+      const settings = await readSettings(this.env.DB);
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, agentId, {
+        kind: 'received',
+        days: Math.max(1, Math.ceil(settings.agent_sla_hours / 24)),
+      });
+    }
+    return result;
   }
 
   async myClaims(agentId: string) {
@@ -655,14 +701,76 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return ok(await readSettings(this.env.DB));
   }
 
+  /** Every setting with its value, default, range, unit, group and last change. */
+  async settingsInfo() {
+    return ok(await settingsInfo(this.env.DB));
+  }
+
+  /** Changes a setting. The old and new values go into the audit log. */
   async setSetting(staffId: string, key: SettingKey, value: number) {
     if (!settingAllowed(key, value)) return fail('invalid_setting');
-    await writeSetting(this.env.DB, key, value, staffId, now()).run();
+    const at = now();
+    const before = (await readSettings(this.env.DB))[key];
+    if (before === value) return ok(null);
+    await this.env.DB.batch([
+      writeSetting(this.env.DB, key, value, staffId, at),
+      auditStatement(this.env.DB, at, `staff:${staffId}`, 'setting.changed', `setting:${key}`, {
+        from: before,
+        to: value,
+      }),
+    ]);
+    return ok(null);
+  }
+
+  /** Puts a setting back to its default. */
+  async resetSetting(staffId: string, key: SettingKey) {
+    if (!Object.hasOwn(SETTINGS, key)) return fail('invalid_setting');
+    const at = now();
+    const before = (await readSettings(this.env.DB))[key];
+    await this.env.DB.batch([
+      resetSetting(this.env.DB, key),
+      auditStatement(this.env.DB, at, `staff:${staffId}`, 'setting.reset', `setting:${key}`, {
+        from: before,
+        to: SETTINGS[key].default,
+      }),
+    ]);
     return ok(null);
   }
 
   async setAgentStatus(staffId: string, agentId: string, status: AgentStatus, reason: string) {
-    return setAgentStatus(this.env.DB, agentId, status, staffId, reason, now());
+    const before = await this.env.DB.prepare('SELECT status FROM agents WHERE user_id = ?')
+      .bind(agentId)
+      .first<{ status: AgentStatus }>();
+    const result = await setAgentStatus(this.env.DB, agentId, status, staffId, reason, now());
+    if (result.ok && before && before.status !== status) {
+      const cause = reason.trim().slice(0, 200);
+      const notice =
+        status === 'active'
+          ? before.status === 'suspended'
+            ? ({ kind: 'reinstated' } as const)
+            : ({ kind: 'approved' } as const)
+          : status === 'suspended'
+            ? ({ kind: 'suspended', reason: cause } as const)
+            : status === 'banned'
+              ? ({ kind: 'banned', reason: cause } as const)
+              : null;
+      if (notice) {
+        await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, agentId, notice);
+      }
+    }
+    return result;
+  }
+
+  /** Sends an application back to the applicant with what to correct. */
+  async returnApplication(staffId: string, agentId: string, reason: string) {
+    const result = await returnApplication(this.env.DB, agentId, staffId, reason, now());
+    if (result.ok) {
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, agentId, {
+        kind: 'returned',
+        reason: reason.trim().slice(0, 300),
+      });
+    }
+    return result;
   }
 
   async setPayoutRule(staffId: string, rule: unknown, validFrom?: number) {
@@ -682,8 +790,51 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return ok(results);
   }
 
-  async confirmDelivery(staffId: string, claimId: string) {
-    return confirmDelivery(this.env.DB, staffId, claimId, now());
+  /**
+   * Confirms a reported delivery. While the checklist setting is on, staff must have ticked every
+   * point in DELIVERY_CHECKS; what they ticked is kept on the claim and in the audit log.
+   */
+  async confirmDelivery(staffId: string, claimId: string, checks: string[] = []) {
+    const settings = await readSettings(this.env.DB);
+    const ticked = DELIVERY_CHECKS.filter(
+      (check) => Array.isArray(checks) && checks.includes(check),
+    );
+    if (settings.review_checklist === 1 && ticked.length !== DELIVERY_CHECKS.length) {
+      return fail(
+        'checklist_incomplete',
+        DELIVERY_CHECKS.filter((check) => !ticked.includes(check)).join(','),
+      );
+    }
+    const agent = await this.env.DB.prepare('SELECT agent_id FROM claims WHERE id = ?')
+      .bind(claimId)
+      .first<{ agent_id: string }>();
+    const at = now();
+    const result = await confirmDelivery(this.env.DB, staffId, claimId, at);
+    if (result.ok) {
+      await this.env.DB.batch([
+        this.env.DB.prepare('UPDATE claims SET checks = ? WHERE id = ?').bind(
+          JSON.stringify(ticked),
+          claimId,
+        ),
+        auditStatement(
+          this.env.DB,
+          at,
+          `staff:${staffId}`,
+          'delivery.checked',
+          `claim:${claimId}`,
+          {
+            checks: ticked,
+          },
+        ),
+      ]);
+      if (agent) {
+        await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, agent.agent_id, {
+          kind: 'delivery_accepted',
+          plate: await claimPlate(this.env.DB, claimId),
+        });
+      }
+    }
+    return result;
   }
 
   /** The evidence doesn't hold up: the claim ends, the agent reads why, nothing is booked. */
@@ -692,7 +843,23 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     claimId: string,
     input: { reason: string; strike: boolean },
   ) {
-    return rejectDelivery(this.env.DB, staffId, claimId, input, now());
+    const result = await rejectDelivery(this.env.DB, staffId, claimId, input, now());
+    if (result.ok) {
+      const struck = (input.strike as unknown) === true;
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, result.value.agent_id, {
+        kind: 'delivery_refused',
+        plate: await claimPlate(this.env.DB, claimId),
+        reason: input.reason.trim(),
+        strikes: struck ? result.value.strikes : null,
+      });
+      if (result.value.suspended) {
+        await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, result.value.agent_id, {
+          kind: 'suspended',
+          reason: `strike limit (${String(result.value.strikes)})`,
+        });
+      }
+    }
+    return result;
   }
 
   async issueInvoice(staffId: string, partnerId: string) {
@@ -742,7 +909,18 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   async markPayoutSent(staffId: string, payoutId: string, bankRef: string) {
-    return markPayoutSent(this.env.DB, staffId, payoutId, bankRef, now());
+    const result = await markPayoutSent(this.env.DB, staffId, payoutId, bankRef, now());
+    if (result.ok) {
+      const payout = await this.env.DB.prepare('SELECT agent_id FROM payouts WHERE id = ?')
+        .bind(payoutId)
+        .first<{ agent_id: string }>();
+      if (payout) {
+        await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, payout.agent_id, {
+          kind: 'payout_sent',
+        });
+      }
+    }
+    return result;
   }
 
   // ---- Agents' identity (docs/DESIGN.md §6) ----
@@ -828,6 +1006,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   // ---- Operations (docs/DESIGN.md §12) ----
+
+  /** The work waiting for staff, each queue against its service level. */
+  async queues() {
+    return ok(await queues(this.env.DB, now()));
+  }
 
   async ops() {
     return ok(await opsOverview(this.env.DB, now()));
@@ -965,6 +1148,7 @@ export default {
       ['notices', () => sendNotices(env.DB, mailer(env), env.KURUMSAL_ORIGIN, at)],
       ['retention', () => redactClosedCasePlaces(env.DB, at)],
       ['fileRetention', () => scheduleRetention(env.DB, at)],
+      ['serviceLevels', () => watchServiceLevels(env.DB, at)],
       ['alerts', () => alertOps(env.DB, mailer(env), env.STAFF_EMAIL, env.MERKEZ_ORIGIN, at)],
     ];
     ctx.waitUntil(

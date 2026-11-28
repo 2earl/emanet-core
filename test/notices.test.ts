@@ -93,9 +93,7 @@ describe('partner notices', () => {
     });
     expect(box.sent[0]?.to).toBe('ops@bank.example');
     expect(box.sent[0]?.subject).toContain('yedieminde');
-    expect(box.sent[0]?.paragraphs.join(' ')).toContain(
-      `${KURUMSAL}/o/${partner.orgId}/cases/${kase.id}`,
-    );
+    expect(box.sent[0]?.rows?.[0]?.url).toBe(`${KURUMSAL}/o/${partner.orgId}/cases/${kase.id}`);
     // Nothing new: nothing sent.
     await sendNotices(db(), box.send, KURUMSAL, T0 + 5 * HOUR);
     expect(box.sent.filter((m) => m.subject.includes('yedieminde'))).toHaveLength(1);

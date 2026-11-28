@@ -8,6 +8,7 @@
  *   otherwise would disclose someone's debt (Banking Law 73).
  */
 import { auditStatement, auditStatementIf, outboxStatement } from './audit';
+import { readSettings } from './settings';
 import { orphanReviewsStatement } from './claims';
 import { fieldsFor, validateAttributes, visibleAttributes } from './fields';
 import { normalizePlate, normalizeVin } from './normalize';
@@ -922,7 +923,7 @@ export async function redactClosedCasePlaces(db: D1Database, at: number): Promis
            AND EXISTS (SELECT 1 FROM case_places p WHERE p.case_id = c.id AND p.address != '')
          LIMIT 500)`,
     )
-    .bind(at - PLACE_RETENTION_DAYS * DAY)
+    .bind(at - (await readSettings(db)).place_retention_days * DAY)
     .run();
   const redacted = result.meta.changes;
   if (redacted > 0) {

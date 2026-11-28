@@ -17,7 +17,7 @@
  * an agent's behalf (DESIGN §7, Law 6493).
  */
 import { auditStatement, auditStatementIf, outboxStatement } from './audit';
-import { cooldownStatement } from './claims';
+import { cooldownStatement, orphanReviewsStatement } from './claims';
 import { payoutFor, percentOf, type PayoutRule } from './pricing';
 import { fail, newId, ok, type Result } from './result';
 import { readSettings } from './settings';
@@ -308,7 +308,7 @@ export async function rejectDelivery(
   claimId: string,
   input: { reason: string; strike: boolean },
   at: number,
-): Promise<Result<{ strikes: number }>> {
+): Promise<Result<{ strikes: number; suspended: boolean; agent_id: string }>> {
   const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
   if (!reason || reason.length > 200) return fail('invalid_reason');
   const claim = await db
@@ -372,7 +372,36 @@ export async function rejectDelivery(
       ),
   ]);
   if (results[0]?.meta.changes !== 1) return fail('conflict_retry');
-  return ok({ strikes: claim.strikes + (strike ? 1 : 0) });
+  const strikes = claim.strikes + (strike ? 1 : 0);
+  // At the limit the agent is suspended at once: their other claims end, and staff decide later
+  // whether to reinstate. The limit is a setting; zero switches this off.
+  let suspended = false;
+  if (strike && settings.strike_limit > 0 && strikes >= settings.strike_limit) {
+    const outcome = await db.batch([
+      db
+        .prepare(
+          `UPDATE agents SET status = 'suspended', updated_at = ? WHERE user_id = ? AND status = 'active'`,
+        )
+        .bind(at, claim.agent_id),
+      db
+        .prepare(
+          `UPDATE claims SET closed_at = ?, close_reason = 'revoked'
+           WHERE agent_id = ? AND closed_at IS NULL
+             AND EXISTS (SELECT 1 FROM agents WHERE user_id = ? AND status = 'suspended' AND updated_at = ?)`,
+        )
+        .bind(at, claim.agent_id, claim.agent_id, at),
+      orphanReviewsStatement(db, at),
+    ]);
+    suspended = outcome[0]?.meta.changes === 1;
+    if (suspended) {
+      await auditStatement(db, at, 'system', 'agent.suspended', `agent:${claim.agent_id}`, {
+        reason: 'strike limit',
+        strikes,
+        limit: settings.strike_limit,
+      }).run();
+    }
+  }
+  return ok({ strikes, suspended, agent_id: claim.agent_id });
 }
 
 // ---------------------------------------------------------------------------------------------
