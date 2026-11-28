@@ -24,7 +24,7 @@ import {
   withdrawErasure,
 } from '../src/erasure';
 import type { ControlApi, FieldApi } from '../src/index';
-import { filesDue } from '../src/privacy';
+import { archiveFilesDue, filesDue } from '../src/privacy';
 import { addDocument, decideDocument, documentsOf } from '../src/vetting';
 import { upsertCase } from '../src/cases';
 import {
@@ -381,7 +381,9 @@ describe('erasure on request and the sealed archive', () => {
     // Files: the criminal record is destroyed, the other document goes to the archive.
     const due = (await filesDue(db(), 500)).filter((f) => f.file_ref.startsWith(`agents/${id}/`));
     expect(due.find((f) => f.file_ref.endsWith('/cr'))?.archive_id).toBeNull();
-    expect(due.find((f) => f.file_ref.endsWith('/pr'))?.archive_id).toBe(archiveId);
+    expect(due.some((f) => f.file_ref.endsWith('/pr'))).toBe(false);
+    const bound = await archiveFilesDue(db(), 200);
+    expect(bound.find((f) => f.file_ref === `agents/${id}/pr`)?.archive_id).toBe(archiveId);
 
     // Found by the address the person had; opened only with a reason; the opening is recorded.
     expect((await listArchives(db(), email)).map((a) => a.id)).toEqual([archiveId]);

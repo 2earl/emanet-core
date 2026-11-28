@@ -127,6 +127,7 @@ import {
 } from './ops';
 import {
   closeRequest,
+  archiveFilesDue,
   eraseDocument,
   eraseEvidence,
   filesDue,
@@ -1151,6 +1152,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   /** Files Emanet Merkez's cron deletes from R2, and its report that it did. */
   async filesDue(limit = 100) {
     return ok(await filesDue(this.env.DB, limit));
+  }
+
+  /** Files Emanet Merkez's cron seals into an archive and moves. */
+  async archiveFilesDue(limit = 50) {
+    return ok(await archiveFilesDue(this.env.DB, limit));
   }
 
   async filesErased(refs: string[]) {

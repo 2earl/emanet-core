@@ -68,12 +68,29 @@ export interface DueFile {
   archive_id: string | null;
 }
 
+/**
+ * Files to destroy. A file bound for the archive is never in this list, so a caller that only
+ * knows how to delete can't destroy one (see archiveFilesDue).
+ */
 export async function filesDue(db: D1Database, limit = 100): Promise<DueFile[]> {
   const { results } = await db
     .prepare(
-      'SELECT file_ref, bucket, archive_id FROM erased_files WHERE erased_at IS NULL ORDER BY requested_at LIMIT ?',
+      `SELECT file_ref, bucket, archive_id FROM erased_files
+       WHERE erased_at IS NULL AND archive_id IS NULL ORDER BY requested_at LIMIT ?`,
     )
     .bind(Math.min(Math.max(limit, 1), 500))
+    .all<DueFile>();
+  return results;
+}
+
+/** Files to seal into an archive and move (src/erasure.ts). */
+export async function archiveFilesDue(db: D1Database, limit = 50): Promise<DueFile[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT file_ref, bucket, archive_id FROM erased_files
+       WHERE erased_at IS NULL AND archive_id IS NOT NULL ORDER BY requested_at LIMIT ?`,
+    )
+    .bind(Math.min(Math.max(limit, 1), 200))
     .all<DueFile>();
   return results;
 }
