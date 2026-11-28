@@ -875,3 +875,21 @@ cases a year) and a message. The request is tied to the login account.
 - A handled request is deleted `invitation_request_days` (default 365) after it was handled (cron
   `invitationRequests`); an open one stays until handled. Deleting the login account deletes its requests; the
   account's export includes them. The retention overview lists them.
+
+## 22. Money and account safeguards (2026-11-28)
+
+- **A payout goes to the IBAN it was approved for.** The first order fixes the agent's verified IBAN
+  on the payout (`payouts.iban`, migration 0019). A second approval, and marking it sent, refuse with
+  `iban_changed` when the agent's IBAN is no longer that one or no longer verified; Merkez shows the
+  fixed IBAN as the one to send to. The accounting export uses it too.
+- **Separate hands.** The staff member who confirmed a delivery (`payouts.confirmed_by`) can't order
+  its payout (`same_staff`), except in development mode. Large payouts still need a second admin.
+- **One partner per tax number**, at approval (§5) and when staff edit a partner (`vkn_exists`).
+- **Security notices** to agents, whatever `agent_mail` says: when the IBAN changes (masked, to the
+  verified address) and when the verified address changes (to the old address).
+- **Email codes:** at most five codes and ten wrong guesses a day per agent, across codes
+  (`too_many_codes`), so a six-digit code can't be worn down by asking again.
+- **Deleted accounts:** login's `deleteUser` also cancels the account's open company application and
+  records a SHA-256 of the account ID for 60 days (`deleted_accounts`), longer than any app session;
+  meanwhile nothing new starts in its name (`account_deleted`: registering as an agent, claiming an
+  invitation, editing an application, asking for an invitation).

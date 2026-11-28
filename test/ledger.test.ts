@@ -152,7 +152,7 @@ describe('from delivery to payout', () => {
   it('delivers every case, pays the agent once on the highest fee, and balances', async () => {
     const { a, b, caseA, caseB, agent, claim, vehicleId } = await deliveredScenario();
     await addCustodyEvidence(agent, claim.id);
-    const delivery = unwrap(await confirmDelivery(db(), 'staff-1', claim.id, T0 + 4 * HOUR));
+    const delivery = unwrap(await confirmDelivery(db(), 'staff-3', claim.id, T0 + 4 * HOUR));
     expect(delivery.cases.sort()).toEqual([caseA.id, caseB.id].sort());
     expect(delivery.payout).toMatchObject({
       gross_kurus: 750_000,
@@ -283,7 +283,7 @@ describe('from delivery to payout', () => {
   it('needs a second admin for large payouts', async () => {
     const { b, agent, claim } = await deliveredScenario();
     await addCustodyEvidence(agent, claim.id);
-    const delivery = unwrap(await confirmDelivery(db(), 'staff-1', claim.id, T0 + 4 * HOUR));
+    const delivery = unwrap(await confirmDelivery(db(), 'staff-3', claim.id, T0 + 4 * HOUR));
     const invoice = unwrap(await issueInvoice(db(), 'staff-1', b.id, T0 + DAYS(1)));
     unwrap(
       await recordReceipt(
@@ -325,12 +325,66 @@ describe('from delivery to payout', () => {
     }
   });
 
+  it('sends only to the IBAN fixed when ordered, and not by whoever confirmed the delivery', async () => {
+    const { b, agent, claim } = await deliveredScenario();
+    await addCustodyEvidence(agent, claim.id);
+    const delivery = unwrap(await confirmDelivery(db(), 'staff-3', claim.id, T0 + 4 * HOUR));
+    const invoice = unwrap(await issueInvoice(db(), 'staff-1', b.id, T0 + DAYS(1)));
+    unwrap(
+      await recordReceipt(
+        db(),
+        'staff-1',
+        {
+          partnerId: b.id,
+          invoiceId: invoice.id,
+          amountKurus: invoice.total_kurus,
+          valueDate: '2027-01-12',
+          bankRef: `S-${invoice.id}`,
+          source: 'manual',
+        },
+        T0 + DAYS(2),
+      ),
+    );
+    // The staff member who confirmed the delivery doesn't also order its payout.
+    expect(await orderPayout(db(), 'staff-3', delivery.payout.id, T0 + DAYS(2))).toMatchObject({
+      error: 'same_staff',
+    });
+    unwrap(await orderPayout(db(), 'staff-1', delivery.payout.id, T0 + DAYS(2)));
+    const fixed = await db()
+      .prepare(
+        'SELECT p.iban, a.iban AS now FROM payouts p JOIN agents a ON a.user_id = p.agent_id WHERE p.id = ?',
+      )
+      .bind(delivery.payout.id)
+      .first<{ iban: string; now: string }>();
+    expect(fixed?.iban).toBe(fixed?.now);
+    // The agent's IBAN changes after approval: nothing goes out until it is ordered again.
+    await db()
+      .prepare('UPDATE agents SET iban = ?, iban_verified_at = NULL WHERE user_id = ?')
+      .bind('TR180006200119000006672315', agent)
+      .run();
+    expect(
+      await markPayoutSent(db(), 'staff-1', delivery.payout.id, 'R-1', T0 + DAYS(3)),
+    ).toMatchObject({
+      error: 'iban_changed',
+    });
+    // Even once the new IBAN is verified, it isn't the one this payout was approved for.
+    await db()
+      .prepare('UPDATE agents SET iban_verified_at = ? WHERE user_id = ?')
+      .bind(T0, agent)
+      .run();
+    expect(
+      await markPayoutSent(db(), 'staff-1', delivery.payout.id, 'R-1', T0 + DAYS(3)),
+    ).toMatchObject({
+      error: 'iban_changed',
+    });
+  });
+
   it('withholds tax by the agent tax profile when the accountant sets a rate', async () => {
     const { agent, claim } = await deliveredScenario();
     await addCustodyEvidence(agent, claim.id);
     await writeSetting(db(), 'withholding_individual_bp', 2000, 'staff-1', T0).run();
     try {
-      const delivery = unwrap(await confirmDelivery(db(), 'staff-1', claim.id, T0 + 4 * HOUR));
+      const delivery = unwrap(await confirmDelivery(db(), 'staff-3', claim.id, T0 + 4 * HOUR));
       expect(delivery.payout).toMatchObject({
         gross_kurus: 750_000,
         withholding_kurus: 150_000,

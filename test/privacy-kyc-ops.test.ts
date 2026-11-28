@@ -227,6 +227,30 @@ describe('one person, one agent account', () => {
     ).toBe('unavailable');
   });
 
+  it('limits email codes to five a day and wrong guesses to ten, across codes', async () => {
+    const agent = await newAgent();
+    const mail = outbox();
+    const ask = (at: number) =>
+      requestEmailCode(db(), mail.send, agent, { email: 'limit@example.com', locale: 'tr' }, at);
+    for (let i = 0; i < 5; i++) unwrap(await ask(T0 + i * 120));
+    expect(await ask(T0 + 600)).toMatchObject({ error: 'too_many_codes' });
+    // A day later it starts again.
+    unwrap(await ask(T0 + 86_400 + 1));
+    // Ten wrong guesses over several codes lock the day, even with the right code after.
+    const base = T0 + 3 * 86_400;
+    let code = '';
+    for (let i = 0; i < 3; i++) {
+      unwrap(await ask(base + i * 120));
+      code = /(\d{6})/.exec(mail.sent.at(-1)?.subject ?? '')?.[1] ?? '';
+      const wrong = code === '000000' ? '000001' : '000000';
+      for (let j = 0; j < 4; j++) await confirmEmailCode(db(), agent, wrong, base + i * 120 + 1);
+    }
+    expect(await confirmEmailCode(db(), agent, code, base + 400)).toMatchObject({
+      error: 'code_expired',
+    });
+    expect(await ask(base + 600)).toMatchObject({ error: 'too_many_codes' });
+  });
+
   it('proves an email address with a mailed code, once per address', async () => {
     const agent = await newAgent();
     const mail = outbox();

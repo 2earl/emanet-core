@@ -160,6 +160,8 @@ import {
 import {
   agentMail,
   mailer,
+  maskEmail,
+  maskIban,
   supportReplyMail,
   supportStaffMail,
   webhookDisabledMail,
@@ -237,7 +239,8 @@ import {
 import { activationChecklist, approvalChecklist } from './activation';
 import { checkUptime, targets as uptimeTargets } from './uptime';
 import { archiveOpenedNotice, isDigestTime, lateRequestsNotice } from './staff-notices';
-import { claimPlate, notifyAgent } from './agent-notices';
+import { claimPlate, notifyAgent, notifyAgentSecurity } from './agent-notices';
+import { purgeDeletedAccounts } from './deleted-accounts';
 import { agreementBundle, type AgreementLocale } from './agent-agreement';
 import { accountingMonth, accountingMonths, closeMonth } from './accounting';
 import { readiness, signOff, withdrawSignoff } from './readiness';
@@ -718,13 +721,28 @@ export class FieldApi extends WorkerEntrypoint<Env> {
 
   async updateProfile(agentId: string, input: ProfileInput) {
     const url: string = this.env.ID_REGISTRY_URL;
-    return updateProfile(
+    const before = await this.env.DB.prepare('SELECT iban FROM agents WHERE user_id = ?')
+      .bind(agentId)
+      .first<{ iban: string | null }>();
+    const result = await updateProfile(
       this.env.DB,
       agentId,
       input,
       now(),
       url === '' ? noRegistry : nviRegistry(url),
     );
+    if (result.ok && before?.iban) {
+      const after = await this.env.DB.prepare('SELECT iban FROM agents WHERE user_id = ?')
+        .bind(agentId)
+        .first<{ iban: string | null }>();
+      if (after?.iban && after.iban !== before.iban) {
+        await notifyAgentSecurity(this.env.DB, this.send, this.env.SAHA_ORIGIN, agentId, {
+          kind: 'iban_changed',
+          masked: maskIban(after.iban),
+        });
+      }
+    }
+    return result;
   }
 
   /** Mails a code to the address the agent wants to prove is theirs. */
@@ -733,7 +751,29 @@ export class FieldApi extends WorkerEntrypoint<Env> {
   }
 
   async confirmEmailCode(agentId: string, code: string) {
-    return confirmEmailCode(this.env.DB, agentId, code, now());
+    const before = await this.env.DB.prepare(
+      'SELECT email, email_verified_at FROM agents WHERE user_id = ?',
+    )
+      .bind(agentId)
+      .first<{ email: string | null; email_verified_at: number | null }>();
+    const result = await confirmEmailCode(this.env.DB, agentId, code, now());
+    // A verified address replaced by another: the old one is told, in case it wasn't them.
+    if (
+      result.ok &&
+      before?.email &&
+      before.email_verified_at !== null &&
+      before.email !== result.value.email
+    ) {
+      await notifyAgentSecurity(
+        this.env.DB,
+        this.send,
+        this.env.SAHA_ORIGIN,
+        agentId,
+        { kind: 'email_changed', masked: maskEmail(result.value.email) },
+        before.email,
+      );
+    }
+    return result;
   }
 
   async reportError(event: string, detail: string) {
@@ -2002,6 +2042,7 @@ export default {
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
       ['supportRetention', () => purgeSupport(env.DB, at)],
       ['invitationRequests', () => purgeInvitationRequests(env.DB, at)],
+      ['deletedAccounts', () => purgeDeletedAccounts(env.DB, at)],
       // Once a day: places written another way than the official list are rewritten.
       ['places', async () => (isDigestTime(at) ? normalisePlaces(env.DB) : null)],
       [

@@ -5,6 +5,7 @@
  * invitation made from a request is linked to it. Handled requests are deleted after
  * `invitation_request_days`.
  */
+import { accountDeleted } from './deleted-accounts';
 import { auditStatement } from './audit';
 import type { PartnerKind } from './cases';
 import {
@@ -91,6 +92,7 @@ export async function requestInvitation(
   const message = typeof input.message === 'string' ? input.message.trim().slice(0, 2000) : '';
   const locale: MailLocale = input.locale === 'en' ? 'en' : 'tr';
   if (!userId) return fail('not_signed_in');
+  if (await accountDeleted(db, userId)) return fail('account_deleted');
   if (company.length < 2) return fail('missing_company');
   if (!KINDS.includes(input.kind as PartnerKind)) return fail('invalid_kind');
   if (contactName.length < 3) return fail('missing_contact');

@@ -100,7 +100,9 @@ export async function listPayouts(db: D1Database, status: string | null): Promis
   const { results } = await db
     .prepare(
       `SELECT p.id, p.agent_id, a.legal_name, p.case_id, p.gross_kurus, p.withholding_kurus,
-         p.net_kurus, p.status, p.ordered_by, p.approved_by, p.bank_ref, p.created_at, p.updated_at
+         p.net_kurus, p.status, p.ordered_by, p.approved_by, p.confirmed_by, p.bank_ref, p.iban,
+         (p.iban IS NOT NULL AND (p.iban IS NOT a.iban OR a.iban_verified_at IS NULL)) AS iban_changed,
+         p.created_at, p.updated_at
        FROM payouts p LEFT JOIN agents a ON a.user_id = p.agent_id
        WHERE (? IS NULL OR p.status = ?) ORDER BY p.created_at DESC LIMIT 500`,
     )
@@ -461,6 +463,14 @@ export async function updatePartner(
 ): Promise<Result<null>> {
   if (!input.legalName.trim()) return fail('missing_legal_name');
   if (input.vkn !== null && !/^\d{10,11}$/.test(input.vkn)) return fail('invalid_vkn');
+  // One partner per tax number, as at approval.
+  if (input.vkn !== null) {
+    const other = await db
+      .prepare('SELECT 1 AS yes FROM partners WHERE vkn = ? AND id != ?')
+      .bind(input.vkn, partnerId)
+      .first();
+    if (other) return fail('vkn_exists');
+  }
   if (!(
     Number.isInteger(input.reconfirmDays) &&
     input.reconfirmDays >= 1 &&

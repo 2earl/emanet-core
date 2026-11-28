@@ -544,7 +544,10 @@ export type AgentNotice =
   | { kind: 'request_reminder'; items: string[]; days: number }
   | { kind: 'erasure_received'; days: number }
   | { kind: 'erasure_done'; years: number }
-  | { kind: 'erasure_refused'; reason: string };
+  | { kind: 'erasure_refused'; reason: string }
+  /** Security notices: always sent, whatever the agent_mail setting. */
+  | { kind: 'iban_changed'; masked: string }
+  | { kind: 'email_changed'; masked: string };
 
 const AGENT_WHY = {
   tr: 'Bu e-postayı Emanet Saha hesabınızla ilgili bir karar verildiği için alıyorsunuz. Sorularınız için bu e-postayı yanıtlayın.',
@@ -791,8 +794,56 @@ export function agentMail(locale: MailLocale, to: string, notice: AgentNotice, s
             ],
         action: { label: tr ? 'Talebimi gör' : 'See my request', url: `${saha}/privacy` },
       };
+    case 'iban_changed':
+      return {
+        ...base,
+        subject: tr ? 'Emanet Saha: IBAN’ınız değişti' : 'Emanet Saha: your IBAN changed',
+        paragraphs: tr
+          ? [
+              `Hesabınızdaki IBAN değiştirildi. Yeni IBAN: ${notice.masked}.`,
+              'Yeni IBAN sizin adınıza olduğu doğrulanana kadar ödeme yapılmaz.',
+              'Bu değişikliği siz yapmadıysanız hemen bu e-postayı yanıtlayın ve 2earl hesabınızın parolasını değiştirin.',
+            ]
+          : [
+              `The IBAN on your account was changed. New IBAN: ${notice.masked}.`,
+              'No payout is made until the new IBAN is confirmed to be in your name.',
+              'If you didn’t make this change, reply to this email at once and change your 2earl password.',
+            ],
+        action: { label: tr ? 'Hesabımı gör' : 'See my account', url: `${saha}/account` },
+        after: [SECURITY_WHY[locale]],
+      };
+    case 'email_changed':
+      return {
+        ...base,
+        subject: tr
+          ? 'Emanet Saha: e-posta adresiniz değişti'
+          : 'Emanet Saha: your email address changed',
+        paragraphs: tr
+          ? [
+              `Emanet Saha hesabınızın e-posta adresi ${notice.masked} olarak değiştirildi. Bundan sonraki e-postalar o adrese gider.`,
+              'Bu değişikliği siz yapmadıysanız hemen bu e-postayı yanıtlayın ve 2earl hesabınızın parolasını değiştirin.',
+            ]
+          : [
+              `The email address of your Emanet Saha account was changed to ${notice.masked}. Emails go there from now on.`,
+              'If you didn’t make this change, reply to this email at once and change your 2earl password.',
+            ],
+        action: { label: tr ? 'Hesabımı gör' : 'See my account', url: `${saha}/account` },
+        after: [SECURITY_WHY[locale]],
+      };
   }
 }
+
+const SECURITY_WHY = {
+  tr: 'Bu e-postayı Emanet Saha hesabınızda güvenlikle ilgili bir değişiklik yapıldığı için alıyorsunuz. Bu bildirimler kapatılamaz.',
+  en: 'You get this email because a security-related change was made on your Emanet Saha account. These notices can’t be switched off.',
+} as const;
+
+/** The end of an IBAN or the shape of an address: enough to recognise, not enough to use. */
+export const maskIban = (iban: string) => `${iban.slice(0, 4)} •••• ${iban.slice(-4)}`;
+export const maskEmail = (email: string) => {
+  const [name = '', domain = ''] = email.split('@');
+  return `${name.slice(0, 2)}•••@${domain}`;
+};
 
 // ---- To staff -----------------------------------------------------------------------------------
 

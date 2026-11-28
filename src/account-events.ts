@@ -1,5 +1,6 @@
 import { auditStatement } from './audit';
 import { orphanReviewsStatement } from './claims';
+import { accountHash } from './deleted-accounts';
 import { eraseAgent } from './erasure';
 
 /**
@@ -17,8 +18,21 @@ import { eraseAgent } from './erasure';
  */
 export async function deleteUser(db: D1Database, userId: string, at: number): Promise<void> {
   await eraseAgent(db, 'system', userId, { reason: 'account deleted' }, at);
-  // Requests to be invited name the person; they go with the account.
-  await db.prepare('DELETE FROM invitation_requests WHERE user_id = ?').bind(userId).run();
+  await db.batch([
+    // Requests to be invited name the person; they go with the account.
+    db.prepare('DELETE FROM invitation_requests WHERE user_id = ?').bind(userId),
+    // A company application the account was filling in stops: nobody can finish it in a
+    // deleted account's name, through a session the apps still hold.
+    db
+      .prepare(
+        `UPDATE onboardings SET status = 'cancelled', decision_reason = 'account deleted', updated_at = ?
+         WHERE claimed_by = ? AND status IN ('invited', 'in_progress', 'signed')`,
+      )
+      .bind(at, userId),
+    db
+      .prepare('INSERT OR IGNORE INTO deleted_accounts (user_hash, deleted_at) VALUES (?, ?)')
+      .bind(await accountHash(userId), at),
+  ]);
 }
 
 /** What Emanet holds about a person: as an agent, their record, claims and payouts. */
