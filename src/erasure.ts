@@ -146,6 +146,8 @@ export interface ArchivePayload {
   acceptances: Record<string, unknown>[];
   requests: Record<string, unknown>[];
   privacy_requests: Record<string, unknown>[];
+  /** Support tickets with their messages and the names of their files (older archives: absent). */
+  support?: Record<string, unknown>[];
 }
 
 const reasonOf = (value: unknown, min = 3): string | null => {
@@ -197,27 +199,42 @@ export async function eraseAgent(
   if (by !== 'system' && blockers.payouts_pending > 0) return fail('payouts_pending');
 
   const rows = async (sql: string) => (await db.prepare(sql).bind(agentId).all()).results;
-  const [checks, documents, acceptances, requests, privacy] = await Promise.all([
-    rows(
-      'SELECT kind, provider, result, reviewed_by, created_at FROM kyc_checks WHERE agent_id = ? ORDER BY created_at',
-    ),
-    rows(
-      `SELECT d.id, d.kind, d.barcode, d.sha256, d.uploaded_at, d.status, d.outcome, d.decided_by, d.decided_at, d.note,
+  const [checks, documents, acceptances, requests, privacy, tickets, messages, files] =
+    await Promise.all([
+      rows(
+        'SELECT kind, provider, result, reviewed_by, created_at FROM kyc_checks WHERE agent_id = ? ORDER BY created_at',
+      ),
+      rows(
+        `SELECT d.id, d.kind, d.barcode, d.sha256, d.uploaded_at, d.status, d.outcome, d.decided_by, d.decided_at, d.note,
          d.request_id, d.file_ref,
          EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = d.file_ref) AS file_gone
        FROM agent_documents d WHERE d.agent_id = ? ORDER BY d.uploaded_at`,
-    ),
-    rows(
-      'SELECT version, sha256, locale, accepted_at, withdrawn_at FROM agent_acceptances WHERE agent_id = ? ORDER BY accepted_at',
-    ),
-    rows(
-      'SELECT kind, subject, note, status, answer, created_by, created_at, answered_at, closed_by, closed_at FROM agent_requests WHERE agent_id = ? ORDER BY created_at',
-    ),
-    rows(
-      `SELECT id, kind, channel, note, received_at, due_at, status, outcome, closed_at FROM privacy_requests
+      ),
+      rows(
+        'SELECT version, sha256, locale, accepted_at, withdrawn_at FROM agent_acceptances WHERE agent_id = ? ORDER BY accepted_at',
+      ),
+      rows(
+        'SELECT kind, subject, note, status, answer, created_by, created_at, answered_at, closed_by, closed_at FROM agent_requests WHERE agent_id = ? ORDER BY created_at',
+      ),
+      rows(
+        `SELECT id, kind, channel, note, received_at, due_at, status, outcome, closed_at FROM privacy_requests
        WHERE subject_kind = 'agent' AND subject_ref = ? ORDER BY received_at`,
-    ),
-  ]);
+      ),
+      rows(
+        `SELECT id, subject, category, status, created_at, closed_at FROM support_tickets
+       WHERE requester_kind = 'agent' AND requester_ref = ? ORDER BY created_at`,
+      ),
+      rows(
+        `SELECT m.ticket_id, m.author_kind, m.author, m.body, m.created_at FROM support_messages m
+       JOIN support_tickets t ON t.id = m.ticket_id
+       WHERE t.requester_kind = 'agent' AND t.requester_ref = ? ORDER BY m.created_at, m.rowid`,
+      ),
+      rows(
+        `SELECT a.ticket_id, a.name, a.content_type, a.size, a.sha256, a.created_at FROM support_attachments a
+       JOIN support_tickets t ON t.id = a.ticket_id
+       WHERE t.requester_kind = 'agent' AND t.requester_ref = ? ORDER BY a.created_at`,
+      ),
+    ]);
 
   const profile: Record<string, unknown> = { ...agent };
   const sealedId = profile.tckn_enc;
@@ -247,6 +264,11 @@ export async function eraseAgent(
     acceptances,
     requests,
     privacy_requests: privacy,
+    support: tickets.map((t) => ({
+      ...t,
+      messages: messages.filter((m) => m.ticket_id === t.id),
+      files: files.filter((f) => f.ticket_id === t.id),
+    })),
   };
   const email = typeof agent.email === 'string' && agent.email ? agent.email : null;
   const keepsTax = blockers.payouts_sent > 0;
@@ -310,6 +332,27 @@ export async function eraseAgent(
       )
       .bind(by, at, archiveId, agentId),
     db.prepare('DELETE FROM agent_documents WHERE agent_id = ?').bind(agentId),
+    // Support: the files go into the sealed archive like the documents, then the tickets go.
+    db
+      .prepare(
+        `INSERT INTO erased_files (file_ref, bucket, record_id, reason, requested_by, requested_at, archive_id, name)
+         SELECT a.file_ref, 'evidence', a.ticket_id, 'erased', ?1, ?2, ?3, 'support'
+         FROM support_attachments a JOIN support_tickets t ON t.id = a.ticket_id
+         WHERE t.requester_kind = 'agent' AND t.requester_ref = ?4
+           AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = a.file_ref)`,
+      )
+      .bind(by, at, archiveId, agentId),
+    ...['support_attachments', 'support_messages'].map((table) =>
+      db
+        .prepare(
+          `DELETE FROM ${table} WHERE ticket_id IN
+             (SELECT id FROM support_tickets WHERE requester_kind = 'agent' AND requester_ref = ?)`,
+        )
+        .bind(agentId),
+    ),
+    db
+      .prepare("DELETE FROM support_tickets WHERE requester_kind = 'agent' AND requester_ref = ?")
+      .bind(agentId),
     db.prepare('DELETE FROM agent_requests WHERE agent_id = ?').bind(agentId),
     db
       .prepare(

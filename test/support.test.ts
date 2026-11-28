@@ -4,6 +4,7 @@ import { updateProfile } from '../src/agents';
 import { registerAgent } from '../src/claims';
 import type { ControlApi, FieldApi, PartnerApi } from '../src/index';
 import { retentionOverview } from '../src/retention';
+import { eraseAgent, openArchive } from '../src/erasure';
 import { ATTACHMENT_LIMIT, OPEN_LIMIT, purgeSupport } from '../src/support';
 import { activePartner, db, randomMobile, randomTckn, T0, unwrap, verifiedEmail } from './helpers';
 
@@ -250,6 +251,37 @@ describe('attachments on support messages', () => {
         .bind(photo.file_ref)
         .first(),
     ).toBeNull();
+  });
+});
+
+describe('erasing an agent', () => {
+  it('takes their support tickets and files into the sealed archive and out of the desk', async () => {
+    const id = await agent();
+    const photo = file();
+    const { id: ticketId } = unwrap(
+      await field().openTicket(id, { ...ticket, attachments: [photo] }),
+    );
+    unwrap(await control().supportReply('staff-1', ticketId, 'Bakıyoruz.'));
+    const archiveId =
+      unwrap(await eraseAgent(db(), 'staff:admin-1', id, { reason: 'Talep' }, T0 + 5)).archive_id ??
+      '';
+    expect(archiveId).not.toBe('');
+    expect(await control().supportTicket(ticketId)).toMatchObject({ ok: false });
+    expect(
+      await db()
+        .prepare('SELECT count(*) AS n FROM support_messages WHERE ticket_id = ?')
+        .bind(ticketId)
+        .first(),
+    ).toEqual({ n: 0 });
+    expect(
+      await db()
+        .prepare('SELECT archive_id, reason, name FROM erased_files WHERE file_ref = ?')
+        .bind(photo.file_ref)
+        .first(),
+    ).toEqual({ archive_id: archiveId, reason: 'erased', name: 'support' });
+    const opened = unwrap(await openArchive(db(), 'admin-1', archiveId, 'Mahkeme talebi', T0 + 6));
+    expect(JSON.stringify(opened)).toContain('IBAN’ıma ödeme yok.');
+    expect(JSON.stringify(opened)).toContain('makbuz.jpg');
   });
 });
 
