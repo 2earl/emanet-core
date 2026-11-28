@@ -405,33 +405,49 @@ export async function getCase(
 export async function listCases(
   db: D1Database,
   partnerId: string,
-  query: { status?: CaseStatus; updatedSince?: number; cursor?: string; limit?: number },
+  query: {
+    status?: CaseStatus;
+    updatedSince?: number;
+    cursor?: string;
+    limit?: number;
+    /** A plate, a chassis number or the partner's own reference: exact match. */
+    search?: string;
+    /** Most recently changed first (the pages); the API reads oldest first to sync. */
+    newest?: boolean;
+  },
 ): Promise<Result<{ cases: CaseView[]; next_cursor: string | null }>> {
   const limit = Math.min(Math.max(query.limit ?? 50, 1), 200);
+  const newest = query.newest === true;
   // Cursor: "<updated_at>.<id>", ordered by both so pages don't skip or repeat.
-  let afterAt = query.updatedSince ?? 0;
-  let afterId = '';
+  let afterAt = newest ? Number.MAX_SAFE_INTEGER : (query.updatedSince ?? 0);
+  let afterId = newest ? '~' : '';
   if (query.cursor !== undefined) {
     const match = /^(\d+)\.([0-9a-f-]{36})$/.exec(query.cursor);
     if (!match) return fail('invalid_cursor');
     afterAt = Number(match[1]);
     afterId = match[2] ?? '';
   }
+  const where = ['partner_id = ?', '(? IS NULL OR status = ?)'];
+  const binds: unknown[] = [partnerId, query.status ?? null, query.status ?? null];
+  const search = query.search?.trim() ?? '';
+  if (search) {
+    const plate = normalizePlate(search);
+    const vin = normalizeVin(search);
+    where.push(`(external_ref = ?
+      OR vehicle_id IN (SELECT vehicle_id FROM vehicle_plates WHERE plate = ?)
+      OR vehicle_id IN (SELECT id FROM vehicles WHERE vin = ?))`);
+    binds.push(search, plate ?? '', vin ?? '');
+  }
+  where.push(
+    newest
+      ? '(updated_at < ? OR (updated_at = ? AND id < ?))'
+      : '(updated_at > ? OR (updated_at = ? AND id > ?))',
+  );
+  binds.push(afterAt, afterAt, afterId);
+  const order = newest ? 'updated_at DESC, id DESC' : 'updated_at, id';
   const { results } = await db
-    .prepare(
-      `SELECT * FROM cases
-       WHERE partner_id = ? AND (? IS NULL OR status = ?) AND (updated_at > ? OR (updated_at = ? AND id > ?))
-       ORDER BY updated_at, id LIMIT ?`,
-    )
-    .bind(
-      partnerId,
-      query.status ?? null,
-      query.status ?? null,
-      afterAt,
-      afterAt,
-      afterId,
-      limit + 1,
-    )
+    .prepare(`SELECT * FROM cases WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ?`)
+    .bind(...binds, limit + 1)
     .all<CaseRow>();
   const page = results.slice(0, limit);
   const last = page.at(-1);
