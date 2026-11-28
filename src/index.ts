@@ -1122,11 +1122,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   /** Staff saw the person and their ID card on a video call. */
-  async recordVideoCall(staffId: string, agentId: string, passed: boolean) {
+  async recordVideoCall(staffId: string, agentId: string, passed: boolean, activate = false) {
     const at = now();
-    const agent = await this.env.DB.prepare('SELECT 1 AS yes FROM agents WHERE user_id = ?')
+    const agent = await this.env.DB.prepare('SELECT status FROM agents WHERE user_id = ?')
       .bind(agentId)
-      .first();
+      .first<{ status: AgentStatus }>();
     if (!agent) return fail('not_found');
     await this.env.DB.batch([
       kycStatement(
@@ -1142,7 +1142,18 @@ export class ControlApi extends WorkerEntrypoint<Env> {
         passed,
       }),
     ]);
-    return ok(null);
+    // Recording a call changes no status by itself. With `activate`, a passed call on an
+    // application also tries the normal activation, so every rule there still applies.
+    if (passed && activate && agent.status === 'kyc_pending') {
+      const result = await this.setAgentStatus(
+        staffId,
+        agentId,
+        'active',
+        'Video call passed, ID matched',
+      );
+      return ok({ activated: result.ok, blocked: result.ok ? null : result.error });
+    }
+    return ok({ activated: false, blocked: null as string | null });
   }
 
   /** What stands between an applicant and activation, for the agent's page in Emanet Merkez. */

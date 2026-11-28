@@ -1,9 +1,10 @@
 import { exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { askAgent } from '../src/agent-requests';
-import { updateProfile } from '../src/agents';
+import { submitApplication, TERMS_VERSION, updateProfile } from '../src/agents';
 import { registerAgent } from '../src/claims';
 import type { ControlApi } from '../src/index';
+import { writeSetting } from '../src/settings';
 import { db, randomMobile, randomTckn, T0, unwrap, verifiedEmail } from './helpers';
 
 const item = (list: { items: { key: string; ok: boolean; blocking: boolean }[] }, key: string) =>
@@ -52,6 +53,76 @@ describe('what stands between an applicant and activation', () => {
     expect(item(after, 'video_call')?.ok).toBe(true);
     expect(item(after, 'requests')).toMatchObject({ ok: false, blocking: true, detail: 1 });
     expect(after.ready).toBe(false);
+  });
+
+  it('activates after a passed call only when asked, and only if the rules allow', async () => {
+    const control = exports.ControlApi as unknown as ControlApi;
+    const make = async () => {
+      const id = crypto.randomUUID();
+      await registerAgent(db(), id, T0);
+      await verifiedEmail(id);
+      unwrap(
+        await updateProfile(
+          db(),
+          id,
+          {
+            legalName: 'Deneme Saha',
+            city: 'İzmir',
+            phone: randomMobile(),
+            iban: 'TR330006100519786457841326',
+            taxProfile: 'individual',
+            tckn: randomTckn(),
+            birthYear: 1990,
+            address: 'Örnek Mah. Deneme Sk. No:1 D:2 Karşıyaka İzmir',
+          },
+          T0,
+        ),
+      );
+      unwrap(await submitApplication(db(), id, TERMS_VERSION, T0));
+      return id;
+    };
+    const statusOf = async (id: string) =>
+      (
+        await db().prepare('SELECT status FROM agents WHERE user_id = ?').bind(id).first<{
+          status: string;
+        }>()
+      )?.status;
+
+    const plain = await make();
+    expect(unwrap(await control.recordVideoCall('staff-1', plain, true))).toEqual({
+      activated: false,
+      blocked: null,
+    });
+    expect(await statusOf(plain)).toBe('kyc_pending');
+
+    const failed = await make();
+    expect(unwrap(await control.recordVideoCall('staff-1', failed, false, true)).activated).toBe(
+      false,
+    );
+    expect(await statusOf(failed)).toBe('kyc_pending');
+
+    // The rules still apply: documents are required by default, so nothing changes here.
+    const blocked = await make();
+    expect(unwrap(await control.recordVideoCall('staff-1', blocked, true, true))).toEqual({
+      activated: false,
+      blocked: 'documents_not_verified',
+    });
+    expect(await statusOf(blocked)).toBe('kyc_pending');
+
+    await writeSetting(db(), 'require_documents', 0, 'staff-1', T0).run();
+    await writeSetting(db(), 'require_signoffs', 0, 'staff-1', T0).run();
+    try {
+      const ready = await make();
+      expect(unwrap(await control.recordVideoCall('staff-1', ready, true, true))).toEqual({
+        activated: true,
+        blocked: null,
+      });
+      expect(await statusOf(ready)).toBe('active');
+    } finally {
+      await db()
+        .prepare("DELETE FROM settings WHERE key IN ('require_documents','require_signoffs')")
+        .run();
+    }
   });
 
   it('has nothing to say about an unknown agent', async () => {
