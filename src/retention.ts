@@ -17,7 +17,8 @@ export interface RetentionRow {
     | 'partner_documents'
     | 'agent_documents'
     | 'case_places'
-    | 'archive';
+    | 'archive'
+    | 'support';
   days: number;
   /** Records the next run takes. */
   due: number;
@@ -113,6 +114,18 @@ export async function retentionOverview(db: D1Database, at: number): Promise<Ret
     ),
   ]);
 
+  const tickets = `SELECT count(*) AS n FROM support_tickets t
+    WHERE t.status = 'closed' AND t.closed_at IS NOT NULL AND t.closed_at <= ?`;
+  const [suAll, suHeld] = await Promise.all([
+    count(db, tickets, at - s.support_retention_days * DAY),
+    count(
+      db,
+      `${tickets} AND t.requester_kind = 'agent' AND EXISTS (SELECT 1 FROM legal_holds h
+         WHERE h.released_at IS NULL AND h.subject_kind = 'agent' AND h.subject_ref = t.requester_ref)`,
+      at - s.support_retention_days * DAY,
+    ),
+  ]);
+
   const [waiting, holds] = await Promise.all([
     count(db, 'SELECT count(*) AS n FROM erased_files WHERE erased_at IS NULL'),
     count(db, 'SELECT count(*) AS n FROM legal_holds WHERE released_at IS NULL'),
@@ -138,6 +151,7 @@ export async function retentionOverview(db: D1Database, at: number): Promise<Ret
       row('agent_documents', s.abandoned_onboarding_days, agAll, agHeld),
       row('case_places', s.place_retention_days, plAll, plHeld),
       row('archive', s.erasure_archive_days, arAll, arHeld),
+      row('support', s.support_retention_days, suAll, suHeld),
     ],
     files_waiting: waiting,
     open_holds: holds,

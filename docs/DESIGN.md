@@ -806,3 +806,18 @@ its own, the rule in days (read from the settings, so it can't drift from them),
 and how many a legal hold keeps back. Its conditions mirror `scheduleRetention`, `redactClosedCasePlaces` and
 `purgeArchives`; `test/retention.test.ts` runs the overview and then the jobs and checks the counts agree. It also
 reports the files queued but not yet removed from storage and the number of open holds. Merkez shows it under Privacy.
+
+## 20. The support desk (2026-11-28)
+
+Agents (Saha) and companies (Kurumsal) write to 2earl; staff answer in Merkez (`src/support.ts`, migration 0014).
+A ticket is one question with a thread. It is `open` while it waits for staff, `answered` while it waits for the
+requester, `closed` when done; a requester's new message reopens it (a ticket closed more than 30 days ago can't be
+reopened: open a new one). A requester sees only their own tickets (agent by account, company by partner) and never a
+staff note. At most five open tickets per requester. Categories are fixed per side (agent: payment, delivery, account,
+technical, other; company: case, invoice, integration, account, other). Staff get one email per new ticket or new
+message naming who and the category, never the text; the requester gets one email per staff answer, also without the
+text. Staff can assign, note, answer and close. No attachments yet.
+
+It holds what people write, so `support_retention_days` (default 730) after a ticket closes the cron
+(`supportRetention`) deletes it with its messages, unless the requester is an agent under a legal hold. The retention
+overview lists it.

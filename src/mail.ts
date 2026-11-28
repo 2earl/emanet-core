@@ -866,3 +866,55 @@ export function lateRequestsMail(
     action: { label: 'Görevlileri aç', url },
   };
 }
+
+/** Staff wrote back on a ticket. Never carries the text: the requester reads it signed in. */
+export function supportReplyMail(
+  locale: MailLocale,
+  to: string,
+  url: string,
+  product: 'Saha' | 'Kurumsal',
+): Mail {
+  return locale === 'tr'
+    ? {
+        to,
+        locale: 'tr',
+        product,
+        subject: 'Emanet: destek talebinize yanıt verildi',
+        paragraphs: [
+          'Destek talebinize 2earl ekibi yanıt yazdı. Yanıtı görmek için hesabınızla giriş yapın.',
+        ],
+        action: { label: 'Yanıtı oku', url },
+      }
+    : {
+        to,
+        locale: 'en',
+        product,
+        subject: 'Emanet: we replied to your support request',
+        paragraphs: ['The 2earl team replied to your support request. Sign in to read the answer.'],
+        action: { label: 'Read the reply', url },
+      };
+}
+
+/** For staff: someone opened a ticket or wrote on one. Who and where, never what. */
+export function supportStaffMail(
+  to: string,
+  what: { kind: 'agent' | 'partner'; fresh: boolean; category: string },
+  url: string,
+): Mail {
+  return {
+    to,
+    locale: 'tr',
+    product: 'Merkez',
+    subject: what.fresh ? 'Emanet: yeni destek talebi' : 'Emanet: destek talebine yeni mesaj',
+    paragraphs: [
+      what.fresh
+        ? 'Yeni bir destek talebi açıldı. Metni Merkez’de, Destek altında okuyun.'
+        : 'Açık bir destek talebine yeni mesaj geldi. Metni Merkez’de, Destek altında okuyun.',
+    ],
+    rows: [
+      { label: `Kim: ${what.kind === 'agent' ? 'görevli' : 'şirket'}` },
+      { label: `Konu türü: ${what.category}` },
+    ],
+    action: { label: 'Destek kutusunu aç', url },
+  };
+}
