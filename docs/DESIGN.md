@@ -798,3 +798,11 @@ provider's account-deleted event is logged as `privacy.erasure_held` and the acc
 the photos of claims on that vehicle. Setting and lifting each need a reason and are audited (`hold.placed`,
 `hold.released`); the rows stay. A held erasure request stays open: staff answer it, citing the hold. After a hold
 is lifted the next cron run applies the retention rules again; an erasure refused by a hold is not redone on its own.
+
+## 19. What is deleted when (2026-11-28)
+
+`retentionOverview` (`src/retention.ts`, `ControlApi.retentionOverview`) lists, per kind of data the cron deletes on
+its own, the rule in days (read from the settings, so it can't drift from them), how many records the next run takes,
+and how many a legal hold keeps back. Its conditions mirror `scheduleRetention`, `redactClosedCasePlaces` and
+`purgeArchives`; `test/retention.test.ts` runs the overview and then the jobs and checks the counts agree. It also
+reports the files queued but not yet removed from storage and the number of open holds. Merkez shows it under Privacy.
