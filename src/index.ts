@@ -42,6 +42,22 @@ import {
 import { listHolds, placeHold, releaseHold } from './holds';
 import { retentionOverview } from './retention';
 import {
+  assignTicket,
+  closeAsRequester,
+  myTicket,
+  myTickets,
+  openTicket,
+  purgeSupport,
+  replyAsRequester,
+  requesterContact,
+  setTicketStatus,
+  staffReply,
+  staffTicket,
+  staffTickets,
+  type RequesterKind,
+  type TicketStatus,
+} from './support';
+import {
   agentProfile,
   earnings,
   myClaims,
@@ -118,7 +134,15 @@ import {
   noRegistry,
   requestEmailCode,
 } from './kyc';
-import { agentMail, mailer, webhookDisabledMail, type MailLocale, type Send } from './mail';
+import {
+  agentMail,
+  mailer,
+  supportReplyMail,
+  supportStaffMail,
+  webhookDisabledMail,
+  type MailLocale,
+  type Send,
+} from './mail';
 import {
   alertOps,
   heartbeat,
@@ -368,6 +392,63 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
     return partnerInvoices(this.env.DB, partner);
+  }
+
+  // ---- Support desk (docs/DESIGN.md §20) ----
+
+  async openTicket(
+    orgId: string,
+    userId: string,
+    input: { subject: string; category: string; message: string },
+  ) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    const result = await openTicket(this.env.DB, 'partner', partner.id, userId, input, now());
+    if (result.ok) {
+      await tellStaffOfTicket(
+        this.env,
+        this.send,
+        result.value.id,
+        'partner',
+        true,
+        input.category,
+      );
+    }
+    return result;
+  }
+
+  async myTickets(orgId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return ok(await myTickets(this.env.DB, 'partner', partner.id));
+  }
+
+  async myTicket(orgId: string, ticketId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return myTicket(this.env.DB, 'partner', partner.id, ticketId);
+  }
+
+  async replyTicket(orgId: string, userId: string, ticketId: string, body: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    const result = await replyAsRequester(
+      this.env.DB,
+      'partner',
+      partner.id,
+      userId,
+      ticketId,
+      body,
+      now(),
+    );
+    if (result.ok) await tellStaffOfTicket(this.env, this.send, ticketId, 'partner', false, '');
+    return result;
+  }
+
+  async closeTicket(orgId: string, userId: string, ticketId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return closeAsRequester(this.env.DB, 'partner', partner.id, userId, ticketId, now());
   }
 
   async invoice(orgId: string, invoiceId: string) {
@@ -687,6 +768,42 @@ export class FieldApi extends WorkerEntrypoint<Env> {
 
   async earnings(agentId: string) {
     return earnings(this.env.DB, agentId);
+  }
+
+  // ---- Support desk (docs/DESIGN.md §20) ----
+
+  async openTicket(agentId: string, input: { subject: string; category: string; message: string }) {
+    const result = await openTicket(this.env.DB, 'agent', agentId, agentId, input, now());
+    if (result.ok) {
+      await tellStaffOfTicket(this.env, this.send, result.value.id, 'agent', true, input.category);
+    }
+    return result;
+  }
+
+  async myTickets(agentId: string) {
+    return ok(await myTickets(this.env.DB, 'agent', agentId));
+  }
+
+  async myTicket(agentId: string, ticketId: string) {
+    return myTicket(this.env.DB, 'agent', agentId, ticketId);
+  }
+
+  async replyTicket(agentId: string, ticketId: string, body: string) {
+    const result = await replyAsRequester(
+      this.env.DB,
+      'agent',
+      agentId,
+      agentId,
+      ticketId,
+      body,
+      now(),
+    );
+    if (result.ok) await tellStaffOfTicket(this.env, this.send, ticketId, 'agent', false, '');
+    return result;
+  }
+
+  async closeTicket(agentId: string, ticketId: string) {
+    return closeAsRequester(this.env.DB, 'agent', agentId, agentId, ticketId, now());
   }
 
   async hunts(agentId: string, query: { city?: string; limit?: number }) {
@@ -1374,6 +1491,47 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return releaseHold(this.env.DB, staffId, holdId, reason, now());
   }
 
+  // ---- Support desk (docs/DESIGN.md §20) ----
+
+  async supportTickets(filter: {
+    status?: TicketStatus | 'active';
+    kind?: RequesterKind;
+    mine?: string;
+  }) {
+    return ok(await staffTickets(this.env.DB, filter));
+  }
+
+  async supportTicket(ticketId: string) {
+    return staffTicket(this.env.DB, ticketId);
+  }
+
+  /** Writes to the requester, or, with `note`, only for staff. The mail never carries the text. */
+  async supportReply(staffId: string, ticketId: string, body: string, note = false) {
+    const result = await staffReply(this.env.DB, staffId, ticketId, body, note, now());
+    if (result.ok && result.value.notify) {
+      try {
+        const to = await requesterContact(this.env.DB, ticketId);
+        const url = await supportUrl(this.env, ticketId);
+        if (to && url) {
+          await this.send(
+            supportReplyMail(to.locale, to.email, url, to.kind === 'agent' ? 'Saha' : 'Kurumsal'),
+          );
+        }
+      } catch {
+        // The answer stands whether or not the mail went.
+      }
+    }
+    return result.ok ? ok(null) : result;
+  }
+
+  async supportAssign(staffId: string, ticketId: string, to: string | null) {
+    return assignTicket(this.env.DB, staffId, ticketId, to, now());
+  }
+
+  async supportClose(staffId: string, ticketId: string, closed: boolean) {
+    return setTicketStatus(this.env.DB, staffId, ticketId, closed, now());
+  }
+
   /** What the cron deletes on its own, by kind of data, and how many records the next run takes. */
   async retentionOverview() {
     return ok(await retentionOverview(this.env.DB, now()));
@@ -1642,6 +1800,7 @@ export default {
           ),
       ],
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
+      ['supportRetention', () => purgeSupport(env.DB, at)],
       [
         'lateRequests',
         async () =>
@@ -1688,3 +1847,47 @@ export default {
     );
   },
 } satisfies ExportedHandler<Env>;
+
+/** Where a requester reads their ticket, or null when it has no home any more. */
+async function supportUrl(env: Env, ticketId: string): Promise<string | null> {
+  const t = await env.DB.prepare(
+    'SELECT requester_kind, requester_ref FROM support_tickets WHERE id = ?',
+  )
+    .bind(ticketId)
+    .first<{ requester_kind: RequesterKind; requester_ref: string }>();
+  if (!t) return null;
+  if (t.requester_kind === 'agent') return `${env.SAHA_ORIGIN}/support/${ticketId}`;
+  const p = await env.DB.prepare('SELECT org_id FROM partners WHERE id = ?')
+    .bind(t.requester_ref)
+    .first<{ org_id: string }>();
+  return p ? `${env.KURUMSAL_ORIGIN}/o/${p.org_id}/support/${ticketId}` : null;
+}
+
+/** One email to staff per new ticket or new message: who and what kind, never the text. */
+async function tellStaffOfTicket(
+  env: Env,
+  send: Send,
+  ticketId: string,
+  kind: RequesterKind,
+  fresh: boolean,
+  category: string,
+): Promise<void> {
+  try {
+    let what = category;
+    if (!what) {
+      const t = await env.DB.prepare('SELECT category FROM support_tickets WHERE id = ?')
+        .bind(ticketId)
+        .first<{ category: string }>();
+      what = t?.category ?? '';
+    }
+    await send(
+      supportStaffMail(
+        env.STAFF_EMAIL,
+        { kind, fresh, category: what },
+        `${env.MERKEZ_ORIGIN}/support/${ticketId}`,
+      ),
+    );
+  } catch {
+    // A ticket is saved whether or not staff were mailed; the inbox shows it either way.
+  }
+}
