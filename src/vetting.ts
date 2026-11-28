@@ -42,7 +42,9 @@ export async function recordAcceptance(
   locale: string,
   at: number,
 ): Promise<Result<{ version: string; sha256: string }>> {
-  if (consents.agreement !== true || consents.notice !== true || consents.consent !== true) {
+  // Over RPC a flag may be anything: only a real `true` is an acceptance.
+  const yes = (value: unknown) => value === true;
+  if (!yes(consents.agreement) || !yes(consents.notice) || !yes(consents.consent)) {
     return fail('consents_missing');
   }
   const sha256 = await agreementDigest();
