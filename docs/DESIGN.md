@@ -671,6 +671,37 @@ invoiced. Merkez's Today page shows each queue with its oldest item, what is due
 overdue. A queue with overdue work is recorded once a day as an error (`sla.<queue>`, counts only),
 so it reaches staff through the alert email like a failing job.
 
+## 13. Vetting, readiness and the accountant (2026-11-28)
+
+**What an applicant accepts.** Three texts in `src/agent-agreement.ts`, each accepted on its own:
+the agent agreement (independent contractor, absolute prohibitions, confidentiality as a data
+processor, payment only on a confirmed delivery, liability, evidence), the privacy notice for
+agents, and the explicit consent for the criminal-record check. The Turkish text binds. An
+acceptance keeps the version and the SHA-256 of the Turkish text. Drafts until a lawyer signs off.
+
+**e-Devlet documents.** An applicant uploads a barcoded criminal record (adli sicil kaydı) and a
+population register extract (nüfus kayıt örneği) with each document's barcode number. Staff verify
+each at turkiye.gov.tr/belge-dogrulama, or by scanning its QR code with the e-Devlet app's
+"Barkodlu Belge Doğrulama", compare what e-Devlet shows with the upload, and record one of four
+outcomes: clear, has a record, doesn't match, not valid. The file is queued for deletion with the
+decision; only the outcome and its date remain. What a criminal record says is never written down.
+Activation needs both documents clear (`require_documents`).
+
+**ID number.** Kept twice: as a keyed hash (one account per person) and sealed (AES-256-GCM), the
+second only because the document for a payment to a person must carry it. It is opened only in the
+accountant's month, and each opening is recorded.
+
+**Readiness.** `src/readiness.ts`: checks the system sees for itself (company details, a payout
+rule, the encryption key, final texts) and four sign-offs staff record with the signer's name:
+the service agreement, the agent agreement, privacy (notices, VERBİS, the transfer arrangement)
+and accounting (rates, document flow). A sign-off counts only for the version in force. While
+`require_signoffs` is on, a company can't be approved and an agent can't be activated without them.
+
+**The accountant's month.** `src/accounting.ts`: one Turkey-time month as an accountant enters it:
+sales invoices with the buyer's tax details, receipts, payments sent to agents with name, ID or
+tax number, address, gross, withholding and net, the journal line by line, totals, withholding by
+tax profile, and whose record lacks something. A finished month can be marked handed over.
+
 ## Sources
 
 - İİK 88/7, vehicles handed to icra within 3 working days: av-saimincekas.com (İİK text)

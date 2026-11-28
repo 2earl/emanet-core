@@ -157,6 +157,19 @@ import {
   type SettingKey,
 } from './settings';
 import { claimPlate, notifyAgent } from './agent-notices';
+import { agreementBundle, type AgreementLocale } from './agent-agreement';
+import { accountingMonth, accountingMonths, closeMonth } from './accounting';
+import { readiness, signOff, withdrawSignoff } from './readiness';
+import {
+  addDocument as addAgentDocument,
+  decideDocument,
+  documentFile,
+  documentsComplete,
+  documentsOf,
+  latestAcceptance,
+  recordAcceptance,
+  type Consents,
+} from './vetting';
 
 const INTEGRATION_ACTIONS: readonly string[] = [
   'key_created',
@@ -529,9 +542,51 @@ export class FieldApi extends WorkerEntrypoint<Env> {
     await reportOps(this.env, 'saha', event, detail);
   }
 
-  async submit(agentId: string, termsVersion: string) {
-    const result = await submitApplication(this.env.DB, agentId, termsVersion, now());
+  /** The agent agreement, the privacy notice and the consent text, with their version and digest. */
+  async agreement(locale: AgreementLocale) {
+    return ok(await agreementBundle(locale === 'en' ? 'en' : 'tr'));
+  }
+
+  /** What this agent accepted last, and whether it is the text in force. */
+  async acceptance(agentId: string) {
+    return ok(await latestAcceptance(this.env.DB, agentId));
+  }
+
+  async documents(agentId: string) {
+    return ok(await documentsOf(this.env.DB, agentId));
+  }
+
+  /** One of the two e-Devlet documents, already stored by Emanet Saha. */
+  async addDocument(
+    agentId: string,
+    input: { kind: string; file_ref: string; sha256: string; barcode: string },
+  ) {
+    return addAgentDocument(this.env.DB, agentId, input, now());
+  }
+
+  /**
+   * Sends the application. The applicant must have accepted the agreement, read the notice and
+   * given the explicit consent, each on its own, and (while the setting is on) uploaded both
+   * documents and given an address.
+   */
+  async submit(agentId: string, termsVersion: string, consents?: Consents, locale = 'tr') {
+    const at = now();
+    const settings = await readSettings(this.env.DB);
+    const profile = await agentProfile(this.env.DB, agentId);
+    if (!profile.ok) return profile;
+    if (!consents || !consents.agreement || !consents.notice || !consents.consent) {
+      return fail('consents_missing');
+    }
+    if (!profile.value.address) return fail('profile_incomplete', 'address');
+    if (
+      settings.require_documents === 1 &&
+      !(await documentsComplete(this.env.DB, agentId, 'present'))
+    ) {
+      return fail('documents_missing');
+    }
+    const result = await submitApplication(this.env.DB, agentId, termsVersion, at);
     if (result.ok) {
+      await recordAcceptance(this.env.DB, agentId, consents, locale, at);
       const settings = await readSettings(this.env.DB);
       await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, agentId, {
         kind: 'received',
@@ -661,6 +716,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   async approveOnboarding(staffId: string, onboardingId: string) {
+    const settings = await readSettings(this.env.DB);
+    if (settings.require_signoffs === 1) {
+      const ready = await readiness(this.env.DB, Boolean(this.env.PII_KEY));
+      if (!ready.partners_ready) return fail('not_ready', 'partners');
+    }
     return approve(this.env.DB, this.send, origins(this.env), staffId, onboardingId, now());
   }
 
@@ -741,6 +801,19 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     const before = await this.env.DB.prepare('SELECT status FROM agents WHERE user_id = ?')
       .bind(agentId)
       .first<{ status: AgentStatus }>();
+    if (status === 'active' && before?.status === 'kyc_pending') {
+      const settings = await readSettings(this.env.DB);
+      if (
+        settings.require_documents === 1 &&
+        !(await documentsComplete(this.env.DB, agentId, 'verified'))
+      ) {
+        return fail('documents_not_verified');
+      }
+      if (settings.require_signoffs === 1) {
+        const ready = await readiness(this.env.DB, Boolean(this.env.PII_KEY));
+        if (!ready.agents_ready) return fail('not_ready', 'agents');
+      }
+    }
     const result = await setAgentStatus(this.env.DB, agentId, status, staffId, reason, now());
     if (result.ok && before && before.status !== status) {
       const cause = reason.trim().slice(0, 200);
@@ -1006,6 +1079,69 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   // ---- Operations (docs/DESIGN.md §12) ----
+
+  // ---- Vetting applicants (docs/DESIGN.md §6) ----
+
+  async agentDocuments(agentId: string) {
+    return ok(await documentsOf(this.env.DB, agentId));
+  }
+
+  async agentAcceptance(agentId: string) {
+    return ok(await latestAcceptance(this.env.DB, agentId));
+  }
+
+  /** Where an undecided document's file is, for staff to open. The view is recorded. */
+  async documentFile(staffId: string, documentId: string) {
+    const file = await documentFile(this.env.DB, documentId);
+    if (!file) return fail('not_found');
+    await auditStatement(
+      this.env.DB,
+      now(),
+      `staff:${staffId}`,
+      'agent.document_viewed',
+      `agent:${file.agent_id}`,
+      { kind: file.kind },
+    ).run();
+    return ok(file);
+  }
+
+  /** Staff verified the document at e-Devlet; the file is deleted with the decision. */
+  async decideDocument(
+    staffId: string,
+    documentId: string,
+    input: { outcome: string; note?: string },
+  ) {
+    return decideDocument(this.env.DB, staffId, documentId, input, now());
+  }
+
+  // ---- Ready for the first customer (docs/DESIGN.md §13) ----
+
+  async readiness() {
+    return ok(await readiness(this.env.DB, Boolean(this.env.PII_KEY)));
+  }
+
+  async signOff(staffId: string, key: string, input: { signer: string; note?: string }) {
+    return signOff(this.env.DB, staffId, key, input, now());
+  }
+
+  async withdrawSignoff(staffId: string, key: string) {
+    return withdrawSignoff(this.env.DB, staffId, key, now());
+  }
+
+  // ---- The accountant's month (docs/DESIGN.md §4.6) ----
+
+  async accountingMonths() {
+    return ok(await accountingMonths(this.env.DB));
+  }
+
+  /** Everything booked in a month, with what payment documents need. Opening it is recorded. */
+  async accountingMonth(staffId: string, month: string) {
+    return accountingMonth(this.env.DB, staffId, month, now());
+  }
+
+  async closeMonth(staffId: string, month: string) {
+    return closeMonth(this.env.DB, staffId, month, now());
+  }
 
   /** The work waiting for staff, each queue against its service level. */
   async queues() {

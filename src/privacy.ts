@@ -130,6 +130,17 @@ export async function scheduleRetention(db: D1Database, at: number): Promise<num
          LIMIT 500`,
       )
       .bind(at, at - settings.abandoned_onboarding_days * DAY, at - kept),
+    // An applicant's e-Devlet documents nobody decided on: they don't wait forever.
+    db
+      .prepare(
+        `INSERT INTO erased_files (file_ref, bucket, record_id, reason, requested_by, requested_at)
+         SELECT d.file_ref, 'evidence', d.id, 'retention', 'system', ?
+         FROM agent_documents d
+         WHERE d.status = 'uploaded' AND d.uploaded_at <= ?
+           AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = d.file_ref)
+         LIMIT 500`,
+      )
+      .bind(at, at - settings.abandoned_onboarding_days * DAY),
   ]);
   return results.reduce((sum, result) => sum + result.meta.changes, 0);
 }

@@ -6,13 +6,16 @@
  * app, phase P6): the agent gives their name as on their ID card, their city, a phone number for
  * the check, and an IBAN in their own name; staff check them and activate the agent.
  */
+import { AGREEMENT_VERSION } from './agent-agreement';
 import { auditStatement } from './audit';
 import type { AgentStatus, EvidenceKind } from './claims';
 import { kycStatement, noRegistry, tcknHash, validTckn, type RegistryCheck } from './kyc';
+import { seal } from './pii';
 import { fail, ok, type Result } from './result';
 
 /** The rules of conduct and agent agreement an agent accepts; bump when they change. */
-export const TERMS_VERSION = '2026-11-27';
+/** What an applicant accepts: the agent agreement's version (src/agent-agreement.ts). */
+export const TERMS_VERSION = AGREEMENT_VERSION;
 
 export type TaxProfile = 'individual' | 'sole_trader' | 'company';
 const TAX_PROFILES: readonly TaxProfile[] = ['individual', 'sole_trader', 'company'];
@@ -38,6 +41,7 @@ export interface AgentProfile {
   open_claims: number;
   /** What staff asked the applicant to correct, while the application is back with them. */
   review_note: string | null;
+  address: string | null;
 }
 
 export async function agentProfile(db: D1Database, agentId: string): Promise<Result<AgentProfile>> {
@@ -45,7 +49,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     .prepare(
       `SELECT status, legal_name, city, phone, iban, iban_verified_at, tax_profile, vkn,
          terms_version, submitted_at, strikes, email, email_verified_at, tckn_hash, birth_year,
-         review_note,
+         review_note, address,
          (SELECT count(*) FROM claims WHERE agent_id = a.user_id AND closed_at IS NULL) AS open_claims
        FROM agents a WHERE user_id = ?`,
     )
@@ -68,6 +72,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
       tckn_hash: string | null;
       birth_year: number | null;
       review_note: string | null;
+      address: string | null;
     }>();
   if (!row) return fail('not_found');
   return ok({
@@ -87,6 +92,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     submitted_at: row.submitted_at,
     strikes: row.strikes,
     review_note: row.status === 'applied' ? row.review_note : null,
+    address: row.address,
     open_claims: row.open_claims,
   });
 }
@@ -121,6 +127,8 @@ export interface ProfileInput {
   /** T.C. kimlik no: needed once; afterwards only when it has to change (before activation). */
   tckn?: string | null;
   birthYear?: number | null;
+  /** Where the person lives: tax law wants it on the document for a payment. */
+  address?: string | null;
 }
 
 /**
@@ -155,11 +163,19 @@ export async function updateProfile(
     return fail('invalid_vkn');
   }
   const locked = profile.status === 'active';
+  const address =
+    typeof input.address === 'string' && input.address.trim()
+      ? input.address.trim().replace(/\s+/g, ' ')
+      : null;
+  if (address !== null && (address.length < 10 || address.length > 300)) {
+    return fail('invalid_address');
+  }
 
   // The ID number: required once, checked, and kept only as a keyed hash.
   const tckn = typeof input.tckn === 'string' ? input.tckn.replace(/\s/g, '') : '';
   const birthYear = input.birthYear ?? profile.birth_year;
   let idHash: string | null = null;
+  let idSealed: string | null = null;
   let registryResult: 'passed' | 'review' | null = null;
   if (tckn) {
     if (locked) return fail('profile_locked');
@@ -173,6 +189,8 @@ export async function updateProfile(
       return fail('invalid_birth_year');
     }
     idHash = await tcknHash(tckn);
+    // Sealed, for the payment documents tax law requires; opened only for the accountant's month.
+    idSealed = await seal(tckn, `agent:${agentId}:tckn`);
     const other = await db
       .prepare('SELECT 1 AS yes FROM agents WHERE tckn_hash = ? AND user_id != ?')
       .bind(idHash, agentId)
@@ -216,7 +234,9 @@ export async function updateProfile(
           `UPDATE agents SET legal_name = ?, city = ?, phone = ?, iban = ?, tax_profile = ?, vkn = ?,
              iban_verified_at = CASE WHEN ? THEN NULL ELSE iban_verified_at END,
              phone_verified_at = CASE WHEN phone IS ? THEN phone_verified_at ELSE NULL END,
-             tckn_hash = coalesce(?, tckn_hash), birth_year = coalesce(?, birth_year), updated_at = ?
+             tckn_hash = coalesce(?, tckn_hash), tckn_enc = coalesce(?, tckn_enc),
+             address = coalesce(?, address),
+             birth_year = coalesce(?, birth_year), updated_at = ?
            WHERE user_id = ?`,
         )
         .bind(
@@ -229,6 +249,8 @@ export async function updateProfile(
           ibanChanged ? 1 : 0,
           phone,
           idHash,
+          idSealed,
+          address,
           idHash === null ? null : birthYear,
           at,
           agentId,
