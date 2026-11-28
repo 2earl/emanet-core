@@ -6,6 +6,7 @@
  * app, phase P6): the agent gives their name as on their ID card, their city, a phone number for
  * the check, and an IBAN in their own name; staff check them and activate the agent.
  */
+import { findProvince } from './places';
 import { AGREEMENT_VERSION } from './agent-agreement';
 import { auditStatement } from './audit';
 import type { AgentStatus, EvidenceKind } from './claims';
@@ -157,11 +158,12 @@ export async function updateProfile(
   if (profile.erased || profile.status === 'banned' || profile.status === 'suspended')
     return fail('agent_not_active');
   const legalName = input.legalName.trim().replace(/\s+/g, ' ');
-  const city = input.city.trim();
+  // One of the 81 provinces, written as the official list writes it (src/places.ts).
+  const city = findProvince(input.city.trim())?.name ?? null;
   if (legalName.length < 3 || legalName.length > 120 || !legalName.includes(' ')) {
     return fail('invalid_name');
   }
-  if (city.length < 2 || city.length > 40) return fail('invalid_city');
+  if (!city) return fail('invalid_city');
   const phone = normalizePhone(input.phone);
   if (!phone) return fail('invalid_phone');
   const iban = normalizeIban(input.iban);
