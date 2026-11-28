@@ -152,3 +152,16 @@ export function missingForAgents(r: Readiness): string[] {
     .filter((check) => needed.includes(check.key) && !check.ok)
     .map((check) => check.key);
 }
+
+/** The checks that still keep companies out, by key. */
+export function missingForPartners(r: Readiness): string[] {
+  const needed: readonly string[] = [
+    'company_details',
+    'payout_rule',
+    'encryption_key',
+    ...NEEDED.partners,
+  ];
+  return r.checks
+    .filter((check) => needed.includes(check.key) && !check.ok)
+    .map((check) => check.key);
+}

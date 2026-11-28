@@ -775,3 +775,11 @@ below 500 is up (Merkez redirects visitors to sign in); a timeout, a refusal or 
 error, which the alert job emails to staff as it does any error. Only the app's name and the status are kept. The
 check runs from the core Worker, so a fault that stops every Worker at once is not seen by it.
 
+## 17. Checklists and the daily note (2026-11-28)
+
+`approvalChecklist` (`src/activation.ts`) is for a company what `activationChecklist` is for an agent: the signed
+agreement, the details and price list, the sign-offs (naming the open ones) and the second approver, judged by the
+same rules `approve` applies. Merkez shows it above the approve button. Once a day, at nine in Istanbul, the cron
+(`lateRequests`) emails `STAFF_EMAIL` how many requests to agents are past their limit and how many answers have waited
+for staff more than two days: counts only, nothing when there is nothing.
+

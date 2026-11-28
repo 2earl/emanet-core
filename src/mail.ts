@@ -838,3 +838,31 @@ export function archiveOpenedMail(
     action: { label: 'Mühürlü arşivi aç', url },
   };
 }
+
+/** To 2earl's staff, once a day: what agents or staff have left waiting too long. Counts only. */
+export function lateRequestsMail(
+  to: string,
+  counts: { late: number; unanswered: number },
+  url: string,
+): Mail {
+  const rows: MailRow[] = [];
+  if (counts.late > 0) {
+    rows.push({ label: `${String(counts.late)} istek süresini aştı ve görevli yanıtlamadı` });
+  }
+  if (counts.unanswered > 0) {
+    rows.push({
+      label: `${String(counts.unanswered)} yanıt iki günden uzun süredir sizi bekliyor`,
+    });
+  }
+  return {
+    to,
+    locale: 'tr',
+    product: 'Merkez',
+    subject: 'Emanet: bekleyen görevli istekleri',
+    paragraphs: [
+      'Görevlilerden istenen bilgi ve belgelerde bekleyenler var. Görevlilerin sayfalarından yanıtlayın, tekrar isteyin ya da isteği geri çekin.',
+    ],
+    rows,
+    action: { label: 'Görevlileri aç', url },
+  };
+}

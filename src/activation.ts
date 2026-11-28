@@ -5,7 +5,7 @@
  */
 import { pendingRequests } from './agent-requests';
 import { kycChecks } from './kyc';
-import { missingForAgents, readiness } from './readiness';
+import { missingForAgents, missingForPartners, readiness } from './readiness';
 import { readSettings } from './settings';
 import { documentsComplete } from './vetting';
 
@@ -84,4 +84,60 @@ export async function activationChecklist(
     { key: 'iban', ok: agent.iban_verified_at !== null, blocking: false },
   ];
   return { items, ready: items.every((item) => item.ok || !item.blocking) };
+}
+
+export interface ApprovalItem {
+  key: 'agreement' | 'details' | 'signoffs' | 'four_eyes';
+  ok: boolean;
+  blocking: true;
+  /** For `signoffs`: the readiness checks still open. */
+  detail?: string[];
+}
+
+export interface ApprovalChecklist {
+  items: ApprovalItem[];
+  ready: boolean;
+}
+
+/** What stands between a company's signed agreement and its approval, as `approve` will judge it. */
+export async function approvalChecklist(
+  db: D1Database,
+  onboardingId: string,
+  staffId: string,
+  hasPiiKey: boolean,
+): Promise<ApprovalChecklist | null> {
+  const row = await db
+    .prepare('SELECT status, org_id, details, price_list, invited_by FROM onboardings WHERE id = ?')
+    .bind(onboardingId)
+    .first<{
+      status: string;
+      org_id: string | null;
+      details: string | null;
+      price_list: string | null;
+      invited_by: string;
+    }>();
+  if (!row) return null;
+  const [settings, ready] = await Promise.all([readSettings(db), readiness(db, hasPiiKey)]);
+  const missing = missingForPartners(ready);
+  const items: ApprovalItem[] = [
+    { key: 'agreement', ok: row.status === 'signed', blocking: true },
+    {
+      key: 'details',
+      ok: Boolean(row.org_id) && Boolean(row.details) && Boolean(row.price_list),
+      blocking: true,
+    },
+    {
+      key: 'signoffs',
+      ok: settings.require_signoffs !== 1 || missing.length === 0,
+      blocking: true,
+      detail: settings.require_signoffs === 1 ? missing : [],
+    },
+    // Another admin approves, unless development mode lets one person test alone.
+    {
+      key: 'four_eyes',
+      ok: row.invited_by !== staffId || settings.dev_mode === 1,
+      blocking: true,
+    },
+  ];
+  return { items, ready: items.every((item) => item.ok) };
 }
