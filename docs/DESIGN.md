@@ -730,7 +730,7 @@ entry, never the reason or any content, so an opening nobody expected is noticed
 **The sealed archive.** Erasing removes everything that names the person from the working
 database and storage, and seals one copy (AES-256-GCM, the PII key, bound to the archive's ID)
 into `erasure_archive`: profile with the ID number, identity checks, document records,
-acceptances, requests. Documents still in storage are sealed and moved under `archive/`; the file
+acceptances, requests, support tickets with their messages (§20). Documents still in storage are sealed and moved under `archive/`; the file
 of a criminal record is destroyed, never archived. The archive is kept `erasure_archive_days`
 (3650; the general limitation period, TBK 146), then its content and files are destroyed and
 only the line stays. Nothing in the product reads it. An admin opens one record or file at a
@@ -816,12 +816,14 @@ reopened: open a new one). A requester sees only their own tickets (agent by acc
 staff note. At most five open tickets per requester. Categories are fixed per side (agent: payment, delivery, account,
 technical, other; company: case, invoice, integration, account, other). Staff get one email per new ticket or new
 message naming who and the category, never the text; the requester gets one email per staff answer, also without the
-text. Staff can assign, note, answer and close. No attachments yet.
+text. Staff can assign, note, answer and close.
 
 It holds what people write, so `support_retention_days` (default 730) after a ticket closes the cron
 (`supportRetention`) deletes it with its messages, unless the requester is an agent under a legal hold. The retention
 overview lists it.
 
 **Attachments.** A message may carry up to three files: a photo (JPEG, PNG, WebP, HEIC) or a PDF, each at most 10 MB. The app stores the file in the evidence bucket under `support/<uuid>` and core records it in `support_attachments` (migration 0016). A requester sees the files on their own ticket but never those on a staff note; staff see all. When a closed ticket is purged its files go to `erased_files`, which Merkez empties from storage; a legal hold on an agent keeps their files as it keeps their tickets.
+
+**Erasing an agent** takes their tickets off the desk at once, open or closed. The sealed archive keeps each ticket with its messages and the names, types, sizes and SHA-256 of its files; the files themselves go to `erased_files` (tied to the archive's ID) and are removed from storage, not sealed. A company's tickets are not touched by an agent's erasure.
 
 **Saved replies.** Answers staff give often are kept in `support_replies` (title in English and Turkish, who they are offered for: everyone, agents or companies, the text, an order). Staff add, change and delete them in Merkez → Support → Saved replies; each change is audited. They hold no personal data, so they have no retention period. At most 30. The first seven ship with migration 0015.
