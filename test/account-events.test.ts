@@ -31,7 +31,11 @@ describe('account events', () => {
       .bind(agent)
       .first();
     expect(row).toEqual({ status: 'banned', legal_name: null, iban: null });
-    expect(await exportUser(db(), 'nobody')).toEqual({ service: 'Emanet', agent: null });
+    expect(await exportUser(db(), 'nobody')).toEqual({
+      service: 'Emanet',
+      agent: null,
+      invitation_requests: [],
+    });
   });
 
   it('suspends a deleted organization and withdraws its open cases', async () => {

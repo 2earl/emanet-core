@@ -17,6 +17,8 @@ import { eraseAgent } from './erasure';
  */
 export async function deleteUser(db: D1Database, userId: string, at: number): Promise<void> {
   await eraseAgent(db, 'system', userId, { reason: 'account deleted' }, at);
+  // Requests to be invited name the person; they go with the account.
+  await db.prepare('DELETE FROM invitation_requests WHERE user_id = ?').bind(userId).run();
 }
 
 /** What Emanet holds about a person: as an agent, their record, claims and payouts. */
@@ -28,7 +30,14 @@ export async function exportUser(db: D1Database, userId: string): Promise<Record
     )
     .bind(userId)
     .first();
-  if (!agent) return { service: 'Emanet', agent: null };
+  const requests = await db
+    .prepare(
+      `SELECT company, kind, contact_name, contact_email, phone, job_title, volume, message, status,
+         created_at, handled_at FROM invitation_requests WHERE user_id = ? ORDER BY created_at`,
+    )
+    .bind(userId)
+    .all();
+  if (!agent) return { service: 'Emanet', agent: null, invitation_requests: requests.results };
   const [claims, payouts] = await Promise.all([
     db
       .prepare(
@@ -43,7 +52,13 @@ export async function exportUser(db: D1Database, userId: string): Promise<Record
       .bind(userId)
       .all(),
   ]);
-  return { service: 'Emanet', agent, claims: claims.results, payouts: payouts.results };
+  return {
+    service: 'Emanet',
+    agent,
+    claims: claims.results,
+    payouts: payouts.results,
+    invitation_requests: requests.results,
+  };
 }
 
 /**

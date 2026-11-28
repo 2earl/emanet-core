@@ -5,6 +5,7 @@
  * and purgeArchives; a test keeps them in step.
  */
 import { CLAIM_HELD } from './holds';
+import { invitationRequestsDue } from './invitation-requests';
 import { readSettings } from './settings';
 
 const DAY = 86_400;
@@ -18,7 +19,8 @@ export interface RetentionRow {
     | 'agent_documents'
     | 'case_places'
     | 'archive'
-    | 'support';
+    | 'support'
+    | 'invitation_requests';
   days: number;
   /** Records the next run takes. */
   due: number;
@@ -126,6 +128,8 @@ export async function retentionOverview(db: D1Database, at: number): Promise<Ret
     ),
   ]);
 
+  const requestsDue = await invitationRequestsDue(db, at);
+
   const [waiting, holds] = await Promise.all([
     count(db, 'SELECT count(*) AS n FROM erased_files WHERE erased_at IS NULL'),
     count(db, 'SELECT count(*) AS n FROM legal_holds WHERE released_at IS NULL'),
@@ -152,6 +156,7 @@ export async function retentionOverview(db: D1Database, at: number): Promise<Ret
       row('case_places', s.place_retention_days, plAll, plHeld),
       row('archive', s.erasure_archive_days, arAll, arHeld),
       row('support', s.support_retention_days, suAll, suHeld),
+      row('invitation_requests', s.invitation_request_days, requestsDue, 0),
     ],
     files_waiting: waiting,
     open_holds: holds,

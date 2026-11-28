@@ -9,6 +9,18 @@
  * The apps authenticate people with login.2earl.com and pass who is acting. The core checks what
  * that person may do here: partner status, agent status, claim ownership, approvals.
  */
+import {
+  declineInvitationRequest,
+  invitationRequest,
+  invitationRequests,
+  markRequestInvited,
+  myInvitationRequest,
+  purgeInvitationRequests,
+  requestInvitation,
+  type InvitationRequestInput,
+  type RequestStatus,
+} from './invitation-requests';
+import { mailRoutes, setMailRoute } from './mail-routes';
 import { PROVINCES, normalisePlaces, unmatchedPlaces } from './places';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { auditStatement } from './audit';
@@ -293,6 +305,16 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
 
   async myOnboardings(userId: string) {
     return mine(this.env.DB, userId);
+  }
+
+  /** Someone without an organization asks 2earl to invite their company. */
+  async requestInvitation(userId: string, input: InvitationRequestInput) {
+    return requestInvitation(this.env.DB, this.send, this.env.MERKEZ_ORIGIN, userId, input, now());
+  }
+
+  /** Their latest request and where it stands. */
+  async myInvitationRequest(userId: string) {
+    return myInvitationRequest(this.env.DB, userId);
   }
 
   async onboarding(onboardingId: string, userId: string) {
@@ -998,8 +1020,39 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return result[0]?.meta.changes === 1 ? ok(null) : fail('not_found');
   }
 
-  async inviteCompany(staffId: string, input: Invitation) {
-    return invite(this.env.DB, this.send, origins(this.env), staffId, input, now());
+  /** An invitation; made from a request, the request is linked to it and closed. */
+  async inviteCompany(staffId: string, input: Invitation, requestId?: string) {
+    const at = now();
+    const result = await invite(this.env.DB, this.send, origins(this.env), staffId, input, at);
+    if (result.ok && requestId) {
+      await markRequestInvited(this.env.DB, staffId, requestId, result.value.id, at);
+    }
+    return result;
+  }
+
+  async invitationRequests(status: RequestStatus | null = null) {
+    return ok(await invitationRequests(this.env.DB, status));
+  }
+
+  async invitationRequest(requestId: string) {
+    return invitationRequest(this.env.DB, requestId);
+  }
+
+  async declineInvitationRequest(
+    staffId: string,
+    requestId: string,
+    input: { note?: string; tell?: boolean },
+  ) {
+    return declineInvitationRequest(this.env.DB, this.send, staffId, requestId, input, now());
+  }
+
+  /** Where Emanet emails 2earl's teams, and changing one. */
+  async mailRoutes() {
+    return ok(await mailRoutes(this.env.DB));
+  }
+
+  async setMailRoute(staffId: string, key: string, address: string) {
+    return setMailRoute(this.env.DB, staffId, key, address, now());
   }
 
   async onboardings(status: OnboardingStatus | null = null) {
@@ -1944,6 +1997,7 @@ export default {
       ],
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
       ['supportRetention', () => purgeSupport(env.DB, at)],
+      ['invitationRequests', () => purgeInvitationRequests(env.DB, at)],
       // Once a day: places written another way than the official list are rewritten.
       ['places', async () => (isDigestTime(at) ? normalisePlaces(env.DB) : null)],
       [

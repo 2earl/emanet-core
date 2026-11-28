@@ -91,6 +91,8 @@ export const SETTINGS = {
   /** How long after a case closes its addresses and notes are kept. */
   place_retention_days: spec('privacy', 'days', 30, 1, 365),
   support_retention_days: spec('privacy', 'days', 730, 90, 3650),
+  /** How long a handled request to be invited (invited or declined) is kept. Open ones stay. */
+  invitation_request_days: spec('privacy', 'days', 365, 30, 3650),
   /** How long the documents of an onboarding that wasn't completed are kept. */
   abandoned_onboarding_days: spec('privacy', 'days', 90, 7, 365),
   /** How long the sealed copy of erased personal data is kept before it is destroyed. */
