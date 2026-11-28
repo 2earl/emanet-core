@@ -153,3 +153,74 @@ describe('the support desk', () => {
     expect(unwrap(await field().myTicket(held, b)).ticket.id).toBe(b);
   });
 });
+
+describe('saved replies', () => {
+  it('starts with the shipped set, then staff add, change and delete their own', async () => {
+    const first = unwrap(await control().supportReplies());
+    expect(first.map((r) => r.id)).toContain('payment-when');
+    expect(first.find((r) => r.id === 'payment-when')?.audience).toBe('agent');
+    expect(first[0]?.id).toBe('looking');
+
+    expect(
+      await control().saveSupportReply('staff-1', {
+        title_en: 'x',
+        title_tr: 'y',
+        audience: 'all',
+        body: 'Merhaba, kısa.',
+      }),
+    ).toMatchObject({ ok: false, error: 'invalid_title' });
+    expect(
+      await control().saveSupportReply('staff-1', {
+        title_en: 'Thanks',
+        title_tr: 'Teşekkürler',
+        audience: 'nobody',
+        body: 'Merhaba, teşekkürler.',
+      }),
+    ).toMatchObject({ ok: false, error: 'invalid_audience' });
+
+    const { id } = unwrap(
+      await control().saveSupportReply('staff-1', {
+        title_en: 'Thanks',
+        title_tr: 'Teşekkürler',
+        audience: 'partner',
+        body: 'Merhaba,\n\nTeşekkür ederiz.\n\n2earl Destek',
+      }),
+    );
+    const added = unwrap(await control().supportReplies());
+    expect(added.at(-1)?.id).toBe(id);
+
+    unwrap(
+      await control().saveSupportReply('staff-2', {
+        id,
+        title_en: 'Thank you',
+        title_tr: 'Teşekkür',
+        audience: 'all',
+        body: 'Merhaba, çok teşekkürler.',
+        position: 5,
+      }),
+    );
+    const changed = unwrap(await control().supportReplies());
+    expect(changed[0]).toMatchObject({
+      id,
+      title_en: 'Thank you',
+      audience: 'all',
+      updated_by: 'staff-2',
+    });
+
+    unwrap(await control().deleteSupportReply('staff-1', id));
+    expect(unwrap(await control().supportReplies()).some((r) => r.id === id)).toBe(false);
+    expect(await control().deleteSupportReply('staff-1', id)).toMatchObject({
+      ok: false,
+      error: 'not_found',
+    });
+    const audit = await db()
+      .prepare('SELECT action FROM audit_events WHERE subject = ? ORDER BY rowid')
+      .bind(`reply:${id}`)
+      .all<{ action: string }>();
+    expect(audit.results.map((r) => r.action)).toEqual([
+      'support.reply_saved',
+      'support.reply_saved',
+      'support.reply_deleted',
+    ]);
+  });
+});

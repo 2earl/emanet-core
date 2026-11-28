@@ -44,9 +44,12 @@ import { retentionOverview } from './retention';
 import {
   assignTicket,
   closeAsRequester,
+  deleteReply,
   myTicket,
   myTickets,
   openTicket,
+  saveReply,
+  savedReplies,
   purgeSupport,
   replyAsRequester,
   requesterContact,
@@ -1529,6 +1532,28 @@ export class ControlApi extends WorkerEntrypoint<Env> {
       }
     }
     return result.ok ? ok(null) : result;
+  }
+
+  async supportReplies() {
+    return ok(await savedReplies(this.env.DB));
+  }
+
+  async saveSupportReply(
+    staffId: string,
+    input: {
+      id?: string;
+      title_en: string;
+      title_tr: string;
+      audience: string;
+      body: string;
+      position?: number;
+    },
+  ) {
+    return saveReply(this.env.DB, staffId, input, now());
+  }
+
+  async deleteSupportReply(staffId: string, replyId: string) {
+    return deleteReply(this.env.DB, staffId, replyId, now());
   }
 
   async supportAssign(staffId: string, ticketId: string, to: string | null) {
