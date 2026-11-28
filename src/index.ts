@@ -184,6 +184,7 @@ import {
   writeSetting,
   type SettingKey,
 } from './settings';
+import { activationChecklist } from './activation';
 import { claimPlate, notifyAgent } from './agent-notices';
 import { agreementBundle, type AgreementLocale } from './agent-agreement';
 import { accountingMonth, accountingMonths, closeMonth } from './accounting';
@@ -1105,6 +1106,12 @@ export class ControlApi extends WorkerEntrypoint<Env> {
       }),
     ]);
     return ok(null);
+  }
+
+  /** What stands between an applicant and activation, for the agent's page in Emanet Merkez. */
+  async activationChecklist(agentId: string) {
+    const list = await activationChecklist(this.env.DB, agentId, Boolean(this.env.PII_KEY));
+    return list ? ok(list) : fail('not_found');
   }
 
   // ---- Personal data on request (docs/DESIGN.md §8) ----

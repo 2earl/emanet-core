@@ -139,3 +139,16 @@ export async function withdrawSignoff(
   ]);
   return ok(null);
 }
+
+/** The checks that still keep agents out, by key, so staff can see what to do. */
+export function missingForAgents(r: Readiness): string[] {
+  const needed: readonly string[] = [
+    'company_details',
+    'payout_rule',
+    'encryption_key',
+    ...NEEDED.agents,
+  ];
+  return r.checks
+    .filter((check) => needed.includes(check.key) && !check.ok)
+    .map((check) => check.key);
+}
