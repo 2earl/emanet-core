@@ -118,6 +118,18 @@ export const normalizeEmail = (value: string): string | null => {
   return email.length <= 254 && EMAIL.test(email) ? email : null;
 };
 
+/**
+ * A uniform six-digit code: values from the top of the 32-bit range, where 1,000,000 doesn't
+ * fit a whole number of times, are drawn again so no code is likelier than another.
+ */
+export function sixDigits(): string {
+  const limit = 4_294_000_000; // the largest multiple of 1,000,000 below 2^32
+  for (;;) {
+    const n = crypto.getRandomValues(new Uint32Array(1))[0] ?? limit;
+    if (n < limit) return String(n % 1_000_000).padStart(6, '0');
+  }
+}
+
 /** Mails a six-digit code to an address the agent wants to use. Not after activation. */
 export async function requestEmailCode(
   db: D1Database,
@@ -160,10 +172,7 @@ export async function requestEmailCode(
   const failures = fresh ? 0 : last.window_failures;
   if (requests >= CODES_PER_DAY || failures >= FAILURES_PER_DAY) return fail('too_many_codes');
   const minutes = (await readSettings(db)).email_code_minutes;
-  const code = String((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 1_000_000).padStart(
-    6,
-    '0',
-  );
+  const code = sixDigits();
   await db
     .prepare(
       `INSERT INTO agent_email_codes (agent_id, email, code_hash, attempts, sent_at, expires_at,
