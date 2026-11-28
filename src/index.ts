@@ -45,6 +45,7 @@ import { retentionOverview } from './retention';
 import {
   assignTicket,
   closeAsRequester,
+  rateTicket,
   attachmentFile,
   deleteReply,
   type AttachmentInput,
@@ -488,6 +489,21 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     return closeAsRequester(this.env.DB, 'partner', partner.id, userId, ticketId, now());
   }
 
+  /** Whether 2earl's answer on one of the company's tickets helped. */
+  async rateTicket(orgId: string, userId: string, ticketId: string, helped: boolean) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return rateTicket(
+      this.env.DB,
+      'partner',
+      partner.id,
+      userId,
+      ticketId,
+      (helped as unknown) === true,
+      now(),
+    );
+  }
+
   async invoice(orgId: string, invoiceId: string) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
@@ -871,6 +887,19 @@ export class FieldApi extends WorkerEntrypoint<Env> {
 
   async closeTicket(agentId: string, ticketId: string) {
     return closeAsRequester(this.env.DB, 'agent', agentId, agentId, ticketId, now());
+  }
+
+  /** Whether 2earl's answer on one of the agent's tickets helped. */
+  async rateTicket(agentId: string, ticketId: string, helped: boolean) {
+    return rateTicket(
+      this.env.DB,
+      'agent',
+      agentId,
+      agentId,
+      ticketId,
+      (helped as unknown) === true,
+      now(),
+    );
   }
 
   async hunts(agentId: string, query: { city?: string; district?: string; limit?: number }) {

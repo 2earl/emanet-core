@@ -38,6 +38,8 @@ export interface Ticket {
   updated_at: number;
   first_response_at: number | null;
   closed_at: number | null;
+  /** The requester's mark on 2earl's answer; null until given. */
+  rating: 'helped' | 'not_helped' | null;
 }
 
 export interface Attachment {
@@ -126,7 +128,7 @@ const text = (value: unknown, min: number, max: number): string | null => {
 };
 
 const COLUMNS = `id, requester_kind, requester_ref, subject, category, status, created_at, updated_at,
-  first_response_at, closed_at`;
+  first_response_at, closed_at, rating`;
 
 export async function openTicket(
   db: D1Database,
@@ -312,6 +314,42 @@ export async function closeAsRequester(
     .run();
   if (result.meta.changes === 0) return fail('not_found');
   await auditStatement(db, at, `${kind}:${userId}`, 'support.closed', `ticket:${id}`).run();
+  return ok(null);
+}
+
+/**
+ * The requester says whether 2earl's answer helped. Only on their own ticket, only once staff
+ * have answered it; a second mark replaces the first.
+ */
+export async function rateTicket(
+  db: D1Database,
+  kind: RequesterKind,
+  ref: string,
+  userId: string,
+  id: string,
+  helped: boolean,
+  at: number,
+): Promise<Result<null>> {
+  const rating = helped ? 'helped' : 'not_helped';
+  const result = await db
+    .prepare(
+      `UPDATE support_tickets SET rating = ?, rated_at = ?
+       WHERE id = ? AND requester_kind = ? AND requester_ref = ? AND first_response_at IS NOT NULL`,
+    )
+    .bind(rating, at, id, kind, ref)
+    .run();
+  if (result.meta.changes === 0) {
+    const exists = await db
+      .prepare(
+        'SELECT 1 AS yes FROM support_tickets WHERE id = ? AND requester_kind = ? AND requester_ref = ?',
+      )
+      .bind(id, kind, ref)
+      .first();
+    return fail(exists ? 'not_answered' : 'not_found');
+  }
+  await auditStatement(db, at, `${kind}:${userId}`, 'support.rated', `ticket:${id}`, {
+    rating,
+  }).run();
   return ok(null);
 }
 
@@ -572,6 +610,9 @@ export interface AnswerTimes {
   p75: number | null;
   /** Share answered within a day, 0..1. */
   within_day: number | null;
+  /** Answers the requester marked, and how many of those helped. */
+  rated: number;
+  helped: number;
 }
 
 /** The value below which `q` of the sorted list falls (nearest rank). */
@@ -583,7 +624,12 @@ const rank = (sorted: number[], q: number): number | null =>
 function summarise(
   kind: RequesterKind,
   category: string | null,
-  rows: { first_response_at: number | null; created_at: number; status: TicketStatus }[],
+  rows: {
+    first_response_at: number | null;
+    created_at: number;
+    status: TicketStatus;
+    rating: 'helped' | 'not_helped' | null;
+  }[],
   at: number,
 ): AnswerTimes {
   const answered = rows.filter((r) => r.first_response_at !== null);
@@ -602,6 +648,8 @@ function summarise(
     median: rank(times, 0.5),
     p75: rank(times, 0.75),
     within_day: times.length === 0 ? null : times.filter((t) => t <= DAY).length / times.length,
+    rated: rows.filter((r) => r.rating !== null).length,
+    helped: rows.filter((r) => r.rating === 'helped').length,
   };
 }
 
@@ -612,7 +660,7 @@ function summarise(
 export async function answerTimes(db: D1Database, at: number): Promise<AnswerTimes[]> {
   const { results } = await db
     .prepare(
-      `SELECT requester_kind, category, status, created_at, first_response_at FROM support_tickets
+      `SELECT requester_kind, category, status, created_at, first_response_at, rating FROM support_tickets
        WHERE created_at > ? AND created_at <= ?`,
     )
     .bind(at - TIMES_DAYS * DAY, at)
@@ -622,6 +670,7 @@ export async function answerTimes(db: D1Database, at: number): Promise<AnswerTim
       status: TicketStatus;
       created_at: number;
       first_response_at: number | null;
+      rating: 'helped' | 'not_helped' | null;
     }>();
   const out: AnswerTimes[] = [];
   for (const kind of ['agent', 'partner'] as const) {

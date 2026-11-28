@@ -839,4 +839,6 @@ overview lists it.
 
 **Erasing an agent** takes their tickets off the desk at once, open or closed. The sealed archive keeps each ticket with its messages and the names, types, sizes and SHA-256 of its files; the files themselves go to `erased_files` (tied to the archive's ID) and are removed from storage, not sealed. A company's tickets are not touched by an agent's erasure.
 
+**Did it help?** Once staff have answered a ticket, its requester can mark whether the answer helped (`rateTicket`, migration 0017: `rating` helped / not_helped and `rated_at` on the ticket). One mark per ticket; a new mark replaces it; audited (`support.rated`). Staff see the mark on the ticket and, in the answer times, how many answers were marked and how many helped. It goes with the ticket when the ticket is purged or the agent erased.
+
 **Saved replies.** Answers staff give often are kept in `support_replies` (title in English and Turkish, who they are offered for: everyone, agents or companies, the text, an order). Staff add, change and delete them in Merkez → Support → Saved replies; each change is audited. They hold no personal data, so they have no retention period. At most 30. The first seven ship with migration 0015.
