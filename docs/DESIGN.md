@@ -724,6 +724,9 @@ the register (§8) with its thirty-day limit and can be withdrawn until decided.
 it out or refuses it with the reason the person is told. It waits while a payout is earned but not
 sent, since erasing removes the IBAN. Deleting the login account erases without asking.
 
+Every opening of an archive record or file also emails `STAFF_EMAIL` (`src/staff-notices.ts`): who, when and which
+entry, never the reason or any content, so an opening nobody expected is noticed. Sending never fails the opening.
+
 **The sealed archive.** Erasing removes everything that names the person from the working
 database and storage, and seals one copy (AES-256-GCM, the PII key, bound to the archive's ID)
 into `erasure_archive`: profile with the ID number, identity checks, document records,

@@ -186,6 +186,7 @@ import {
   type SettingKey,
 } from './settings';
 import { activationChecklist } from './activation';
+import { archiveOpenedNotice } from './staff-notices';
 import { claimPlate, notifyAgent } from './agent-notices';
 import { agreementBundle, type AgreementLocale } from './agent-agreement';
 import { accountingMonth, accountingMonths, closeMonth } from './accounting';
@@ -1361,7 +1362,17 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   /** Opens one sealed record; the reason is recorded first. */
   async openArchive(staffId: string, archiveId: string, reason: string) {
-    return openArchive(this.env.DB, staffId, archiveId, reason, now());
+    const at = now();
+    const result = await openArchive(this.env.DB, staffId, archiveId, reason, at);
+    if (result.ok) {
+      await archiveOpenedNotice(this.send, this.env.STAFF_EMAIL, this.env.MERKEZ_ORIGIN, {
+        kind: 'record',
+        staffId,
+        archiveId,
+        at,
+      });
+    }
+    return result;
   }
 
   async archiveHasFile(archiveId: string, ref: string) {
@@ -1376,7 +1387,17 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     reason: string,
     bytes: ArrayBuffer,
   ) {
-    return openArchiveFile(this.env.DB, staffId, archiveId, ref, reason, bytes, now());
+    const at = now();
+    const result = await openArchiveFile(this.env.DB, staffId, archiveId, ref, reason, bytes, at);
+    if (result.ok) {
+      await archiveOpenedNotice(this.send, this.env.STAFF_EMAIL, this.env.MERKEZ_ORIGIN, {
+        kind: 'file',
+        staffId,
+        archiveId,
+        at,
+      });
+    }
+    return result;
   }
 
   /** For Emanet Merkez's cron: seals a file on its way into the archive. */
