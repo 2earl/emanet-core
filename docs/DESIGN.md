@@ -336,8 +336,11 @@ invited | in_progress ─(14 days)→ expired ─(staff send a new link)→ invi
    address, verified (`OrganizationProvisioning.hasAddress`); only then does the core give the
    onboarding to the account, and only to the first one.
 4. The contact creates the company's login organization from Kurumsal (login's
-   `OrganizationProvisioning.create`, owner = the contact) or picks one they own. One company per
-   organization.
+   `OrganizationProvisioning.create`, owner = the contact, invited by the staff member who
+   invited). Always a new organization: an existing one, with members and settings Emanet didn't
+   see, can't be used. The core sets it once (`org_locked` after that). One company per
+   organization, and one partner per tax number: approval is refused (`vkn_exists`, also on the
+   approval checklist as `unique_vkn`) when a partner already has the VKN given.
 5. The contact gives the company's details (legal name, address, tax office, VKN, MERSİS, KEP,
    signatory, billing and operations contacts, e-invoice) and uploads documents to R2
    `emanet-documents`: signature circular and tax certificate expected, trade registry gazette
@@ -859,7 +862,12 @@ cases a year) and a message. The request is tied to the login account.
 - The team address (route `invitation_requests`) gets one email naming the company and kind with a link to the request
   in Merkez; it carries no contact details. The person gets a receipt.
 - One open request per account; at most three in 30 days.
-- Merkez lists requests under Onboarding (new first) and shows one with its details. **Invite** opens the invitation
+- Kurumsal asks for a Cloudflare Turnstile challenge on the form and checks it server-side
+  (`siteverify`, hostname and action checked) before the core sees the request. Without its keys
+  the form is closed: it fails closed, never open.
+- Merkez lists requests under Onboarding (new first) and shows one with its details, with what
+  it may duplicate (`matches`): partners and open onboardings with a similar name or the same
+  address, and earlier requests from the account; a free-mail address is flagged. **Invite** opens the invitation
   form filled from the request; when the invitation is sent the request becomes `invited` and points at the onboarding.
   **Decline** keeps an internal note and, unless staff untick it, emails the person that 2earl can't go ahead now,
   with no reason.

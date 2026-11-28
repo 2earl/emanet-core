@@ -17,6 +17,7 @@ import {
   myInvitationRequest,
   purgeInvitationRequests,
   requestInvitation,
+  requestMatches,
   type InvitationRequestInput,
   type RequestStatus,
 } from './invitation-requests';
@@ -1034,8 +1035,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return ok(await invitationRequests(this.env.DB, status));
   }
 
+  /** One request, with what it may duplicate (partners, open onboardings, earlier requests). */
   async invitationRequest(requestId: string) {
-    return invitationRequest(this.env.DB, requestId);
+    const found = await invitationRequest(this.env.DB, requestId);
+    if (!found.ok) return found;
+    return ok({ ...found.value, matches: await requestMatches(this.env.DB, found.value) });
   }
 
   async declineInvitationRequest(

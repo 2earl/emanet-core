@@ -29,7 +29,9 @@ const clean = (value: unknown, max: number): string =>
   typeof value === 'string'
     ? value
         .trim()
-        .replace(/[ \t]+/g, ' ')
+        // One line: no line breaks or control characters (they end up in email subjects).
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\s\u0000-\u001f\u007f]+/g, ' ')
         .slice(0, max)
     : '';
 
@@ -183,6 +185,91 @@ export async function invitationRequest(
     .bind(id)
     .first<InvitationRequest>();
   return row ? ok(row) : fail('not_found');
+}
+
+/** What a request may duplicate, for staff to look at before inviting. */
+export interface RequestMatches {
+  /** Partners whose name looks like the requested organization's. */
+  partners: { id: string; legal_name: string; status: string }[];
+  /** Open onboardings for a similar name or the same contact address. */
+  onboardings: { id: string; company: string; status: string }[];
+  /** Earlier requests from the same account. */
+  earlier: number;
+}
+
+const STOP = new Set([
+  'a',
+  'ş',
+  's',
+  'as',
+  'aş',
+  'anonim',
+  'şirketi',
+  'sirketi',
+  'ltd',
+  'şti',
+  'sti',
+  'limited',
+  'inc',
+  'co',
+]);
+
+/** A name reduced to its words, so "Örnek Bank A.Ş." and "ÖRNEK BANK" compare equal. */
+export function nameKey(name: string): string {
+  return (
+    name
+      .toLocaleLowerCase('tr-TR')
+      // Without Turkish letters' marks, so "ISIK", "Işık" and "ışık" compare equal.
+      .replace(/ı/g, 'i')
+      .normalize('NFD')
+      .replace(/\p{M}/gu, '')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .split(' ')
+      .filter((w) => w && !STOP.has(w))
+      .join(' ')
+  );
+}
+
+const alike = (a: string, b: string) => {
+  const x = nameKey(a);
+  const y = nameKey(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length < y.length ? [x, y] : [y, x];
+  return short.length >= 4 && long.includes(short);
+};
+
+export async function requestMatches(
+  db: D1Database,
+  r: InvitationRequest,
+): Promise<RequestMatches> {
+  const [partners, onboardings, earlier] = await db.batch([
+    db.prepare('SELECT id, legal_name, status FROM partners'),
+    db.prepare(
+      `SELECT id, company, status, contact_email FROM onboardings
+       WHERE status IN ('invited', 'in_progress', 'signed')`,
+    ),
+    db
+      .prepare('SELECT count(*) AS n FROM invitation_requests WHERE user_id = ? AND id != ?')
+      .bind(r.user_id, r.id),
+  ]);
+  return {
+    partners: (partners?.results as { id: string; legal_name: string; status: string }[])
+      .filter((p) => alike(p.legal_name, r.company))
+      .slice(0, 10),
+    onboardings: (
+      onboardings?.results as {
+        id: string;
+        company: string;
+        status: string;
+        contact_email: string;
+      }[]
+    )
+      .filter((o) => o.contact_email === r.contact_email || alike(o.company, r.company))
+      .map(({ id, company, status }) => ({ id, company, status }))
+      .slice(0, 10),
+    earlier: (earlier?.results[0] as { n: number } | undefined)?.n ?? 0,
+  };
 }
 
 /** Not now: the request is closed, the person is told without a reason, the note stays with staff. */

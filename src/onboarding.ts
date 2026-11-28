@@ -538,6 +538,10 @@ export async function approve(
     return fail('four_eyes');
   }
   if (await partnerByOrg(db, row.org_id)) return fail('partner_exists');
+  // One partner per company: a second organization claiming a tax number already on Emanet is
+  // refused, whoever asks, so nobody can stand up a look-alike of an existing creditor.
+  const claimed = JSON.parse(row.details) as Details;
+  if (await partnerByVkn(db, claimed.vkn)) return fail('vkn_exists');
   const prices = checkPriceList(JSON.parse(row.price_list));
   if (!prices.ok) return prices;
   const details = JSON.parse(row.details) as Details;
@@ -727,6 +731,14 @@ export async function onboardingForUser(
   return ok({ ...rest, contract_text: text?.contract_text ?? null });
 }
 
+/** A partner already on Emanet with this tax number, if any. */
+export async function partnerByVkn(db: D1Database, vkn: string): Promise<{ id: string } | null> {
+  return db
+    .prepare('SELECT id FROM partners WHERE vkn = ? LIMIT 1')
+    .bind(vkn)
+    .first<{ id: string }>();
+}
+
 export async function linkOrganization(
   db: D1Database,
   id: string,
@@ -737,6 +749,9 @@ export async function linkOrganization(
   const row = await owned(db, id, userId, at, true);
   if (!row.ok) return row;
   if (!/^org_[A-Za-z0-9_-]{4,40}$/.test(orgId)) return fail('invalid_org');
+  // The organization is made for this onboarding (Kurumsal creates it in login) and set once:
+  // an application can't be moved onto another organization, with other members, afterwards.
+  if (row.value.org_id !== null) return fail('org_locked');
   if (await partnerByOrg(db, orgId)) return fail('partner_exists');
   const taken = await db
     .prepare(

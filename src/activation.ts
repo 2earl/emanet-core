@@ -5,6 +5,7 @@
  */
 import { pendingRequests } from './agent-requests';
 import { kycChecks } from './kyc';
+import { partnerByVkn } from './onboarding';
 import { missingForAgents, missingForPartners, readiness } from './readiness';
 import { readSettings } from './settings';
 import { documentsComplete } from './vetting';
@@ -87,7 +88,7 @@ export async function activationChecklist(
 }
 
 export interface ApprovalItem {
-  key: 'agreement' | 'details' | 'signoffs' | 'four_eyes';
+  key: 'agreement' | 'details' | 'unique_vkn' | 'signoffs' | 'four_eyes';
   ok: boolean;
   blocking: true;
   /** For `signoffs`: the readiness checks still open. */
@@ -117,7 +118,12 @@ export async function approvalChecklist(
       invited_by: string;
     }>();
   if (!row) return null;
-  const [settings, ready] = await Promise.all([readSettings(db), readiness(db, hasPiiKey)]);
+  const vkn = row.details ? (JSON.parse(row.details) as { vkn?: string }).vkn : undefined;
+  const [settings, ready, sameVkn] = await Promise.all([
+    readSettings(db),
+    readiness(db, hasPiiKey),
+    vkn ? partnerByVkn(db, vkn) : Promise.resolve(null),
+  ]);
   const missing = missingForPartners(ready);
   const items: ApprovalItem[] = [
     { key: 'agreement', ok: row.status === 'signed', blocking: true },
@@ -126,6 +132,8 @@ export async function approvalChecklist(
       ok: Boolean(row.org_id) && Boolean(row.details) && Boolean(row.price_list),
       blocking: true,
     },
+    // No partner on Emanet already has this tax number.
+    { key: 'unique_vkn', ok: sameVkn === null, blocking: true },
     {
       key: 'signoffs',
       ok: settings.require_signoffs !== 1 || missing.length === 0,

@@ -5,7 +5,7 @@
   "account_id": "304c2b77d734c688c8309d5a535f561a",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
-  "compatibility_flags": ["nodejs_als"],
+  "compatibility_flags": ["global_fetch_strictly_public", "nodejs_als"],
 
   // No public address. The three Emanet apps reach the EmanetCore entrypoint over Service
   // Bindings (docs/DESIGN.md §2); nothing on the Internet can.

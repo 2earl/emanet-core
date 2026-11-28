@@ -85,8 +85,10 @@ async function ready(box = outbox()) {
   unwrap(await claim(db(), box.token(), user, T0 + 60));
   const org = orgId();
   unwrap(await linkOrganization(db(), id, user, org, T0 + 120));
-  unwrap(await saveDetails(db(), id, user, DETAILS, T0 + 180));
-  return { id, user, org, box };
+  // Each company its own tax number: Emanet takes one partner per VKN.
+  const vkn = String(1_000_000_000 + Math.floor(Math.random() * 8_999_999_999)).slice(0, 10);
+  unwrap(await saveDetails(db(), id, user, { ...DETAILS, vkn }, T0 + 180));
+  return { id, user, org, box, vkn };
 }
 
 async function signNow(id: string, user: string, box: ReturnType<typeof outbox>, at = T0 + 240) {
@@ -348,6 +350,29 @@ describe('onboarding', () => {
     const other = await ready();
     expect(await linkOrganization(db(), id, user, other.org, T0)).toMatchObject({
       error: 'org_in_use',
+    });
+    // Once linked, the application stays with its organization.
+    unwrap(await linkOrganization(db(), id, user, orgId(), T0));
+    expect(await linkOrganization(db(), id, user, orgId(), T0)).toMatchObject({
+      error: 'org_locked',
+    });
+  });
+
+  it('refuses a second partner with a tax number already on Emanet', async () => {
+    const first = await ready();
+    unwrap(await signNow(first.id, first.user, first.box));
+    unwrap(await approve(db(), first.box.send, ORIGINS, 'staff-2', first.id, T0 + 300));
+    const second = await ready();
+    unwrap(
+      await saveDetails(db(), second.id, second.user, { ...DETAILS, vkn: first.vkn }, T0 + 200),
+    );
+    unwrap(await signNow(second.id, second.user, second.box));
+    const list = await approvalChecklist(db(), second.id, 'staff-2', true);
+    expect(list?.items.find((i) => i.key === 'unique_vkn')).toMatchObject({ ok: false });
+    expect(
+      await approve(db(), second.box.send, ORIGINS, 'staff-2', second.id, T0 + 300),
+    ).toMatchObject({
+      error: 'vkn_exists',
     });
   });
 
