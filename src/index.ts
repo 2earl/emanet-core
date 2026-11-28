@@ -465,7 +465,14 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
 
   async listCases(
     orgId: string,
-    query: { status?: CaseStatus; updatedSince?: number; cursor?: string; limit?: number },
+    query: {
+      status?: CaseStatus;
+      updatedSince?: number;
+      cursor?: string;
+      limit?: number;
+      search?: string;
+      newest?: boolean;
+    },
   ) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');

@@ -281,6 +281,33 @@ describe('cases', () => {
     expect(reopened.status).toBe('active');
   });
 
+  it('finds cases by plate, chassis number or reference, newest first', async () => {
+    const partner = await activePartner();
+    const a = unwrap(
+      await upsertCase(db(), partner, caseInput({ external_ref: 'REF-A' }), 'u', T0),
+    );
+    for (let i = 1; i < 4; i++) unwrap(await upsertCase(db(), partner, caseInput(), 'u', T0 + i));
+    const byRef = unwrap(await listCases(db(), partner.id, { search: 'REF-A' }));
+    expect(byRef.cases.map((c) => c.id)).toEqual([a.id]);
+    const plate = byRef.cases[0]?.vehicle.plate ?? '';
+    const spaced = plate.replace(/^(\d{2})([A-Z]+)(\d+)$/, '$1 $2 $3').toLowerCase();
+    const byPlate = unwrap(await listCases(db(), partner.id, { search: spaced }));
+    expect(byPlate.cases.map((c) => c.id)).toContain(a.id);
+    expect(unwrap(await listCases(db(), partner.id, { search: 'nothing' })).cases).toHaveLength(0);
+    const newest = unwrap(await listCases(db(), partner.id, { newest: true, limit: 2 }));
+    expect(newest.cases[0]?.updated_at).toBeGreaterThanOrEqual(newest.cases[1]?.updated_at ?? 0);
+    const rest = unwrap(
+      await listCases(db(), partner.id, {
+        newest: true,
+        limit: 2,
+        cursor: newest.next_cursor ?? '',
+      }),
+    );
+    const all = [...newest.cases, ...rest.cases].map((c) => c.id);
+    expect(new Set(all).size).toBe(4);
+    expect(all.at(-1)).toBe(a.id);
+  });
+
   it('pages through cases with a cursor', async () => {
     const partner = await activePartner();
     for (let i = 0; i < 5; i++) unwrap(await upsertCase(db(), partner, caseInput(), 'u', T0 + i));
