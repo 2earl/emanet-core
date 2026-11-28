@@ -186,6 +186,7 @@ import {
   type SettingKey,
 } from './settings';
 import { activationChecklist } from './activation';
+import { checkUptime, targets as uptimeTargets } from './uptime';
 import { archiveOpenedNotice } from './staff-notices';
 import { claimPlate, notifyAgent } from './agent-notices';
 import { agreementBundle, type AgreementLocale } from './agent-agreement';
@@ -1599,6 +1600,20 @@ export default {
           ),
       ],
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
+      [
+        'uptime',
+        () =>
+          checkUptime(
+            env.DB,
+            uptimeTargets({
+              kurumsal: env.KURUMSAL_ORIGIN,
+              merkez: env.MERKEZ_ORIGIN,
+              saha: env.SAHA_ORIGIN,
+            }),
+            (url, init) => fetch(url, init),
+            at,
+          ),
+      ],
       ['alerts', () => alertOps(env.DB, mailer(env), env.STAFF_EMAIL, env.MERKEZ_ORIGIN, at)],
     ];
     ctx.waitUntil(

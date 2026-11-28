@@ -767,3 +767,11 @@ the second approver on large payouts stay. It ends by itself after twelve hours 
 is only changed through `setDevMode` (the generic setting calls refuse it), and `dev_mode.on` and
 `dev_mode.off` go to the audit log. Merkez shows a banner on every page while it is on. Records made in
 that time are real records: switch it on only with test data.
+
+## 16. Looking from outside (2026-11-28)
+
+`src/uptime.ts`: the five-minute cron asks the public site and the three apps for their front page. An answer
+below 500 is up (Merkez redirects visitors to sign in); a timeout, a refusal or a 5xx is recorded as an `uptime.<app>`
+error, which the alert job emails to staff as it does any error. Only the app's name and the status are kept. The
+check runs from the core Worker, so a fault that stops every Worker at once is not seen by it.
+
