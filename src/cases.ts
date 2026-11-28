@@ -12,6 +12,7 @@ import { readSettings } from './settings';
 import { orphanReviewsStatement } from './claims';
 import { fieldsFor, validateAttributes, visibleAttributes } from './fields';
 import { normalizePlate, normalizeVin } from './normalize';
+import { canonicalPlace } from './places';
 import { openAttributes, sealAttributes } from './pii';
 import { checkPriceList, feeFor, type PriceList } from './pricing';
 import { fail, newId, ok, type Result } from './result';
@@ -278,7 +279,9 @@ interface PlaceRow {
 const text = (value: unknown, max: number): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 
-function checkCaseInput(input: CaseInput): Result<{ vin: string | null; plate: string }> {
+function checkCaseInput(
+  input: CaseInput,
+): Result<{ vin: string | null; plate: string; places: PlaceInput[] | undefined }> {
   // Values arrive over RPC from a partner's upload: check types, not only the TypeScript shape.
   const raw = input as unknown as Record<string, unknown> | null;
   if (typeof raw !== 'object' || raw === null) return fail('invalid_case');
@@ -310,21 +313,26 @@ function checkCaseInput(input: CaseInput): Result<{ vin: string | null; plate: s
   }
   const places = input.places ?? [];
   if (!Array.isArray(places) || places.length > MAX_PLACES) return fail('invalid_places');
+  const written: PlaceInput[] = [];
   for (const place of places) {
     if (!['owner_home', 'work', 'last_seen', 'other'].includes(place.kind)) {
       return fail('invalid_place', 'kind');
     }
-    if (!text(place.address, 300) || !text(place.district, 60) || !text(place.city, 60)) {
-      return fail('invalid_place', 'address');
-    }
+    if (!text(place.address, 300)) return fail('invalid_place', 'address');
+    if (!text(place.city, 60)) return fail('invalid_place', 'city');
+    if (!text(place.district, 60)) return fail('invalid_place', 'district');
+    // One spelling per place, from the official list (src/places.ts).
+    const named = canonicalPlace(place.city, place.district);
+    if (!named.ok) return named;
     const hasLat = place.lat !== undefined;
     if (hasLat !== (place.lng !== undefined)) return fail('invalid_place', 'lat/lng');
     if (hasLat && !(Math.abs(place.lat ?? 99) <= 90 && Math.abs(place.lng ?? 999) <= 180)) {
       return fail('invalid_place', 'lat/lng');
     }
     if (place.note !== undefined && place.note.length > 500) return fail('invalid_place', 'note');
+    written.push({ ...place, ...named.value });
   }
-  return ok({ vin, plate });
+  return ok({ vin, plate, places: input.places === undefined ? undefined : written });
 }
 
 async function placesOf(db: D1Database, caseId: string): Promise<PlaceRow[]> {
@@ -598,7 +606,9 @@ export async function upsertCase(
   if (partner.status !== 'active') return fail('partner_not_active');
   const checked = checkCaseInput(input);
   if (!checked.ok) return checked;
-  const { vin, plate } = checked.value;
+  const { vin, plate, places } = checked.value;
+  // From here on the places are written as the official list writes them.
+  input = places === undefined ? input : { ...input, places };
 
   const [caseFields, vehicleFields, placeFields] = await Promise.all([
     fieldsFor(db, partner.id, 'case'),

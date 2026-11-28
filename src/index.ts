@@ -9,6 +9,7 @@
  * The apps authenticate people with login.2earl.com and pass who is acting. The core checks what
  * that person may do here: partner status, agent status, claim ownership, approvals.
  */
+import { PROVINCES, normalisePlaces, unmatchedPlaces } from './places';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { auditStatement } from './audit';
 import { deleteOrganization, deleteUser, exportUser } from './account-events';
@@ -403,6 +404,11 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
   }
 
   // ---- Support desk (docs/DESIGN.md §20) ----
+
+  /** Turkey's provinces and their districts, for the case form. */
+  provinces() {
+    return ok(PROVINCES);
+  }
 
   /** How soon companies' questions are usually answered (null until there are enough). */
   async supportAnswerTime() {
@@ -809,6 +815,11 @@ export class FieldApi extends WorkerEntrypoint<Env> {
   }
 
   // ---- Support desk (docs/DESIGN.md §20) ----
+
+  /** Turkey's provinces and their districts, for the forms that ask for a city. */
+  provinces() {
+    return ok(PROVINCES);
+  }
 
   /** How soon agents' questions are usually answered (null until there are enough). */
   async supportAnswerTime() {
@@ -1562,6 +1573,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return ok(await staffTickets(this.env.DB, filter));
   }
 
+  /** Case places whose city or district isn't in the official list, with how many cases. */
+  async unmatchedPlaces() {
+    return ok(await unmatchedPlaces(this.env.DB));
+  }
+
   /** First-answer times over the last 30 days, per side and category. */
   async supportTimes() {
     return ok(await answerTimes(this.env.DB, now()));
@@ -1899,6 +1915,8 @@ export default {
       ],
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
       ['supportRetention', () => purgeSupport(env.DB, at)],
+      // Once a day: places written another way than the official list are rewritten.
+      ['places', async () => (isDigestTime(at) ? normalisePlaces(env.DB) : null)],
       [
         'lateRequests',
         async () =>

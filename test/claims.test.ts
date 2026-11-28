@@ -53,21 +53,22 @@ async function huntableVehicle(city = 'İstanbul', district = 'Üsküdar') {
 describe('hunts and claims', () => {
   it('shows active vehicles at district level with what the agent earns', async () => {
     await payoutRule(4000);
-    const { vehicleId, view } = await huntableVehicle('Kırşehir');
+    const { vehicleId, view } = await huntableVehicle('kirsehir', 'KAMAN');
     const agent = await activeAgent();
     const hunts = unwrap(await listHunts(db(), agent, { city: 'Kırşehir' }, T0));
     const hunt = hunts.find((h) => h.vehicle_id === vehicleId);
     expect(hunt).toMatchObject({
       plate: view.vehicle.plate,
       earn_kurus: 800_000,
-      areas: [{ district: 'Üsküdar', city: 'Kırşehir' }],
+      // Written as the official list writes them, however the company typed them.
+      areas: [{ district: 'Kaman', city: 'Kırşehir' }],
     });
     expect(JSON.stringify(hunt)).not.toContain('Gizli');
   });
 
   it('lists the places with vehicles open to the agent and narrows the list to one district', async () => {
     await payoutRule();
-    const city = `Çankırı-${crypto.randomUUID().slice(0, 6)}`;
+    const city = 'Çankırı';
     const merkez = await huntableVehicle(city, 'Merkez');
     await huntableVehicle(city, 'Merkez');
     const ilgaz = await huntableVehicle(city, 'Ilgaz');

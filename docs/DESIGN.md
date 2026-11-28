@@ -224,6 +224,14 @@ cases               id, partner_id, vehicle_id, external_ref (partner's own id),
 case_places         case_id, kind (owner_home | work | last_seen | other), address,
                     district, city, lat?, lng?, note, visibility
 ```
+**Places are one list** (`src/places.ts`, data in `src/places-data.ts`: Turkey's 81 provinces and
+973 districts, from turkey-neighbourhoods, MIT). A case place's city must be a province and its
+district a district of that province; any spelling is accepted ("ISTANBUL", "kadikoy", a plate
+code, "Urfa") and stored as the list writes it. Anything else is `invalid_place` with detail
+`city` or `district`. An agent's city is one of the provinces too. Once a day the cron rewrites
+stored places that match under another spelling; what matches nothing stays and is listed for
+staff (`ControlApi.unmatchedPlaces`). Apps get the list from `provinces()` for their forms.
+
 Case status: `draft → active → claimed → reported → towed → delivered → invoiced → paid` with side
 exits `withdrawn` (the partner removed it), `expired` (not re-confirmed), `rejected` (evidence
 failed) and `disputed`.
