@@ -234,7 +234,7 @@ export async function confirmDelivery(
     db
       .prepare(
         `INSERT INTO payouts (id, agent_id, vehicle_id, case_id, gross_kurus, withholding_kurus,
-           net_kurus, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           net_kurus, status, confirmed_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         payoutId,
@@ -245,6 +245,7 @@ export async function confirmDelivery(
         withholding,
         net,
         gross === 0 ? 'cancelled' : 'awaiting_receipt',
+        staffId,
         at,
         at,
       ),
@@ -683,7 +684,8 @@ export async function orderPayout(
 ): Promise<Result<{ status: 'ready' | 'approved' }>> {
   const payout = await db
     .prepare(
-      `SELECT p.status, p.gross_kurus, p.ordered_by, a.iban_verified_at
+      `SELECT p.status, p.gross_kurus, p.ordered_by, p.confirmed_by, p.iban, a.iban AS agent_iban,
+         a.iban_verified_at
        FROM payouts p JOIN agents a ON a.user_id = p.agent_id WHERE p.id = ?`,
     )
     .bind(payoutId)
@@ -691,13 +693,22 @@ export async function orderPayout(
       status: string;
       gross_kurus: number;
       ordered_by: string | null;
+      confirmed_by: string | null;
+      iban: string | null;
+      agent_iban: string | null;
       iban_verified_at: number | null;
     }>();
   if (!payout) return fail('not_found');
   if (payout.status !== 'ready') return fail('payout_not_ready', payout.status);
   // Money goes only to an IBAN staff have checked is in the agent's own name.
-  if (payout.iban_verified_at === null) return fail('iban_not_verified');
+  if (payout.iban_verified_at === null || payout.agent_iban === null) {
+    return fail('iban_not_verified');
+  }
+  // A second order checks the IBAN fixed by the first one still is the agent's, verified.
+  if (payout.iban !== null && payout.iban !== payout.agent_iban) return fail('iban_changed');
   const settings = await readSettings(db);
+  // Whoever confirmed the delivery that earned this payout doesn't also order it.
+  if (payout.confirmed_by === staffId && settings.dev_mode !== 1) return fail('same_staff');
   const needsSecond = payout.gross_kurus >= settings.dual_approval_kurus;
 
   if (payout.ordered_by === null) {
@@ -705,10 +716,10 @@ export async function orderPayout(
     const results = await db.batch([
       db
         .prepare(
-          `UPDATE payouts SET ordered_by = ?, approved_by = ?, status = ?, updated_at = ?
+          `UPDATE payouts SET ordered_by = ?, approved_by = ?, status = ?, iban = ?, updated_at = ?
            WHERE id = ? AND status = 'ready' AND ordered_by IS NULL`,
         )
-        .bind(staffId, needsSecond ? null : staffId, status, at, payoutId),
+        .bind(staffId, needsSecond ? null : staffId, status, payout.agent_iban, at, payoutId),
       auditStatementIf(
         db,
         at,
@@ -760,11 +771,32 @@ export async function markPayoutSent(
   at: number,
 ): Promise<Result<null>> {
   const payout = await db
-    .prepare('SELECT agent_id, case_id, net_kurus, status FROM payouts WHERE id = ?')
+    .prepare(
+      `SELECT p.agent_id, p.case_id, p.net_kurus, p.status, p.iban, a.iban AS agent_iban,
+         a.iban_verified_at
+       FROM payouts p JOIN agents a ON a.user_id = p.agent_id WHERE p.id = ?`,
+    )
     .bind(payoutId)
-    .first<{ agent_id: string; case_id: string; net_kurus: number; status: string }>();
+    .first<{
+      agent_id: string;
+      case_id: string;
+      net_kurus: number;
+      status: string;
+      iban: string | null;
+      agent_iban: string | null;
+      iban_verified_at: number | null;
+    }>();
   if (!payout) return fail('not_found');
   if (payout.status !== 'approved') return fail('payout_not_approved', payout.status);
+  // Sent only to the IBAN fixed when it was ordered, while it is still the agent's verified one:
+  // an IBAN changed after approval (by the agent, or by someone in their account) stops it here.
+  if (
+    payout.iban === null ||
+    payout.iban !== payout.agent_iban ||
+    payout.iban_verified_at === null
+  ) {
+    return fail('iban_changed');
+  }
   if (!bankRef.trim()) return fail('missing_bank_ref');
   try {
     await db.batch([

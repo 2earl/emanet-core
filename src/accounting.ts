@@ -130,7 +130,7 @@ export async function accountingMonth(
     db
       .prepare(
         `SELECT po.id, po.updated_at AS paid_at, po.agent_id, a.legal_name AS name, a.tckn_enc,
-           a.address, a.tax_profile, a.vkn, a.iban, po.gross_kurus, po.withholding_kurus,
+           a.address, a.tax_profile, a.vkn, coalesce(po.iban, a.iban) AS iban, po.gross_kurus, po.withholding_kurus,
            po.net_kurus, po.bank_ref
          FROM payouts po JOIN agents a ON a.user_id = po.agent_id
          WHERE po.status = 'sent' AND po.updated_at >= ? AND po.updated_at < ? ORDER BY po.updated_at`,

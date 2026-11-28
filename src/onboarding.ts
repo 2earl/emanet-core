@@ -10,6 +10,7 @@
  *
  * The link's secret is only in the email: the database keeps its SHA-256. Every step is audited.
  */
+import { accountDeleted } from './deleted-accounts';
 import { auditStatement, auditStatementIf } from './audit';
 import { partnerByOrg, type PartnerKind } from './cases';
 import {
@@ -668,6 +669,7 @@ export async function claim(
   userId: string,
   at: number,
 ): Promise<Result<{ id: string }>> {
+  if (await accountDeleted(db, userId)) return fail('account_deleted');
   const invitation = await invitationByToken(db, token, at);
   if (!invitation.ok) return invitation;
   const i = invitation.value;
@@ -708,6 +710,7 @@ async function owned(
 ): Promise<Result<Row>> {
   const row = await rowById(db, id);
   if (!row || row.claimed_by !== userId) return fail('not_found');
+  if (editable && (await accountDeleted(db, userId))) return fail('account_deleted');
   if (editable) {
     if (row.status !== 'in_progress') return fail('not_editable', row.status);
     if (row.expires_at <= at) return fail('expired');

@@ -314,7 +314,7 @@ describe('agents', () => {
 describe('money', () => {
   async function invoiced() {
     const { partner, claim } = await reported();
-    const delivery = unwrap(await confirmDelivery(db(), 'staff-1', claim.id, T0 + 2 * HOUR));
+    const delivery = unwrap(await confirmDelivery(db(), 'staff-3', claim.id, T0 + 2 * HOUR));
     const invoice = unwrap(await issueInvoice(db(), 'staff-1', partner.id, T0 + 3 * HOUR));
     return { partner, invoice, payoutId: delivery.payout.id };
   }

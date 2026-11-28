@@ -108,6 +108,10 @@ export function kycStatement(
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const RESEND_SECONDS = 60;
 const MAX_ATTEMPTS = 5;
+/** Per agent and day: codes sent, and wrong codes typed across all of them. */
+const DAY = 86_400;
+export const CODES_PER_DAY = 5;
+export const FAILURES_PER_DAY = 10;
 
 export const normalizeEmail = (value: string): string | null => {
   const email = value.trim().toLowerCase();
@@ -136,10 +140,25 @@ export async function requestEmailCode(
     .first();
   if (taken) return fail('email_taken');
   const last = await db
-    .prepare('SELECT sent_at FROM agent_email_codes WHERE agent_id = ?')
+    .prepare(
+      `SELECT sent_at, window_start, window_requests, window_failures FROM agent_email_codes
+       WHERE agent_id = ?`,
+    )
     .bind(agentId)
-    .first<{ sent_at: number }>();
+    .first<{
+      sent_at: number;
+      window_start: number;
+      window_requests: number;
+      window_failures: number;
+    }>();
   if (last && at - last.sent_at < RESEND_SECONDS) return fail('sent_recently');
+  // A new code doesn't reset the day's count: at most five codes and ten wrong guesses a day, so
+  // a six-digit code can't be worn down by asking again and again.
+  const fresh = !last || at - last.window_start >= DAY;
+  const windowStart = fresh ? at : last.window_start;
+  const requests = fresh ? 0 : last.window_requests;
+  const failures = fresh ? 0 : last.window_failures;
+  if (requests >= CODES_PER_DAY || failures >= FAILURES_PER_DAY) return fail('too_many_codes');
   const minutes = (await readSettings(db)).email_code_minutes;
   const code = String((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 1_000_000).padStart(
     6,
@@ -147,12 +166,24 @@ export async function requestEmailCode(
   );
   await db
     .prepare(
-      `INSERT INTO agent_email_codes (agent_id, email, code_hash, attempts, sent_at, expires_at)
-       VALUES (?, ?, ?, 0, ?, ?)
+      `INSERT INTO agent_email_codes (agent_id, email, code_hash, attempts, sent_at, expires_at,
+         window_start, window_requests, window_failures)
+       VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)
        ON CONFLICT (agent_id) DO UPDATE SET email = excluded.email, code_hash = excluded.code_hash,
-         attempts = 0, sent_at = excluded.sent_at, expires_at = excluded.expires_at`,
+         attempts = 0, sent_at = excluded.sent_at, expires_at = excluded.expires_at,
+         window_start = excluded.window_start, window_requests = excluded.window_requests,
+         window_failures = excluded.window_failures`,
     )
-    .bind(agentId, email, await keyedHash(`email-code:${agentId}`, code), at, at + minutes * 60)
+    .bind(
+      agentId,
+      email,
+      await keyedHash(`email-code:${agentId}`, code),
+      at,
+      at + minutes * 60,
+      windowStart,
+      requests + 1,
+      failures,
+    )
     .run();
   const locale = input.locale === 'en' ? 'en' : 'tr';
   await db.prepare('UPDATE agents SET locale = ? WHERE user_id = ?').bind(locale, agentId).run();
@@ -169,11 +200,23 @@ export async function confirmEmailCode(
 ): Promise<Result<{ email: string }>> {
   const pending = await db
     .prepare(
-      'SELECT email, code_hash, attempts, expires_at FROM agent_email_codes WHERE agent_id = ?',
+      `SELECT email, code_hash, attempts, expires_at, window_failures FROM agent_email_codes
+       WHERE agent_id = ?`,
     )
     .bind(agentId)
-    .first<{ email: string; code_hash: string; attempts: number; expires_at: number }>();
-  if (!pending || pending.expires_at <= at || pending.attempts >= MAX_ATTEMPTS) {
+    .first<{
+      email: string;
+      code_hash: string;
+      attempts: number;
+      expires_at: number;
+      window_failures: number;
+    }>();
+  if (
+    !pending ||
+    pending.expires_at <= at ||
+    pending.attempts >= MAX_ATTEMPTS ||
+    pending.window_failures >= FAILURES_PER_DAY
+  ) {
     return fail('code_expired');
   }
   const given = typeof code === 'string' ? code.replace(/\s/g, '') : '';
@@ -182,7 +225,10 @@ export async function confirmEmailCode(
     (await keyedHash(`email-code:${agentId}`, given)) !== pending.code_hash
   ) {
     await db
-      .prepare('UPDATE agent_email_codes SET attempts = attempts + 1 WHERE agent_id = ?')
+      .prepare(
+        `UPDATE agent_email_codes SET attempts = attempts + 1, window_failures = window_failures + 1
+         WHERE agent_id = ?`,
+      )
       .bind(agentId)
       .run();
     return fail('wrong_code');

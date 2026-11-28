@@ -9,6 +9,7 @@
  * up without a delivery, the same agent waits a cooldown before claiming that vehicle again, so
  * nobody can hold a vehicle forever by re-claiming it.
  */
+import { accountDeleted } from './deleted-accounts';
 import { auditStatement } from './audit';
 import { fieldsFor, visibleAttributes } from './fields';
 import { openAttributes } from './pii';
@@ -25,6 +26,7 @@ export async function registerAgent(
   userId: string,
   at: number,
 ): Promise<Result<null>> {
+  if (await accountDeleted(db, userId)) return fail('account_deleted');
   await db.batch([
     db
       .prepare(
