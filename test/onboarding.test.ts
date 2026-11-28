@@ -1,3 +1,4 @@
+import { approvalChecklist } from '../src/activation';
 import { exports } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { partnerByOrg } from '../src/cases';
@@ -121,6 +122,25 @@ const PROVIDER = {
 describe('onboarding', () => {
   beforeEach(async () => {
     unwrap(await setProvider(db(), 'staff-1', PROVIDER, T0));
+  });
+
+  it('lists what keeps an approval back, and that the inviter can’t approve alone', async () => {
+    const box = outbox();
+    const { id, user } = await ready(box);
+    const early = (await approvalChecklist(db(), id, 'staff-2', true)) ?? {
+      items: [],
+      ready: true,
+    };
+    expect(early.items.find((i) => i.key === 'agreement')?.ok).toBe(false);
+    expect(early.ready).toBe(false);
+    unwrap(await signNow(id, user, box));
+    const inviter = await approvalChecklist(db(), id, 'staff-1', true);
+    expect(inviter?.items.find((i) => i.key === 'four_eyes')?.ok).toBe(false);
+    expect(inviter?.items.find((i) => i.key === 'agreement')?.ok).toBe(true);
+    expect(inviter?.items.find((i) => i.key === 'details')?.ok).toBe(true);
+    const other = await approvalChecklist(db(), id, 'staff-2', true);
+    expect(other?.items.find((i) => i.key === 'four_eyes')?.ok).toBe(true);
+    expect(await approvalChecklist(db(), crypto.randomUUID(), 'staff-2', true)).toBeNull();
   });
 
   it('lets the inviter approve while development mode is on', async () => {

@@ -185,9 +185,9 @@ import {
   writeSetting,
   type SettingKey,
 } from './settings';
-import { activationChecklist } from './activation';
+import { activationChecklist, approvalChecklist } from './activation';
 import { checkUptime, targets as uptimeTargets } from './uptime';
-import { archiveOpenedNotice } from './staff-notices';
+import { archiveOpenedNotice, isDigestTime, lateRequestsNotice } from './staff-notices';
 import { claimPlate, notifyAgent } from './agent-notices';
 import { agreementBundle, type AgreementLocale } from './agent-agreement';
 import { accountingMonth, accountingMonths, closeMonth } from './accounting';
@@ -805,6 +805,17 @@ export class ControlApi extends WorkerEntrypoint<Env> {
       if (!ready.partners_ready) return fail('not_ready', 'partners');
     }
     return approve(this.env.DB, this.send, origins(this.env), staffId, onboardingId, now());
+  }
+
+  /** What stands between a signed agreement and approval, for the company's page in Merkez. */
+  async approvalChecklist(staffId: string, onboardingId: string) {
+    const list = await approvalChecklist(
+      this.env.DB,
+      onboardingId,
+      staffId,
+      Boolean(this.env.PII_KEY),
+    );
+    return list ? ok(list) : fail('not_found');
   }
 
   async returnOnboarding(staffId: string, onboardingId: string, reason: string) {
@@ -1600,6 +1611,13 @@ export default {
           ),
       ],
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
+      [
+        'lateRequests',
+        async () =>
+          isDigestTime(at)
+            ? lateRequestsNotice(env.DB, mailer(env), env.STAFF_EMAIL, env.MERKEZ_ORIGIN, at)
+            : 0,
+      ],
       [
         'uptime',
         () =>
