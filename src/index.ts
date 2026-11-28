@@ -92,6 +92,7 @@ import {
   claimDetails,
   claimVehicle,
   expireClaims,
+  huntAreas,
   listHunts,
   recordSighting,
   registerAgent,
@@ -861,8 +862,13 @@ export class FieldApi extends WorkerEntrypoint<Env> {
     return closeAsRequester(this.env.DB, 'agent', agentId, agentId, ticketId, now());
   }
 
-  async hunts(agentId: string, query: { city?: string; limit?: number }) {
+  async hunts(agentId: string, query: { city?: string; district?: string; limit?: number }) {
     return listHunts(this.env.DB, agentId, query, now());
+  }
+
+  /** Cities and districts with vehicles open to this agent, with how many. */
+  async huntAreas(agentId: string) {
+    return huntAreas(this.env.DB, agentId, now());
   }
 
   async claim(agentId: string, vehicleId: string) {

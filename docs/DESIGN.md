@@ -430,6 +430,9 @@ Next, not built:
 - Map and list of open hunts near the agent: plate, make, model, colour, rough area (district or
   neighbourhood), and the fee the agent will earn.
 - No owner names, no debt amounts, ever.
+- The app offers only places that have something: `huntAreas` lists each city and district with
+  vehicles open to this agent (not claimed by anyone, not in their cooldown) and how many; the
+  list narrows to one city and, within it, one district.
 
 **Claiming**
 - Tap to claim. The claim lasts T hours (configured in Y) with at most K active claims per agent.

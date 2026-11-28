@@ -5,6 +5,7 @@ import {
   claimDetails,
   claimVehicle,
   expireClaims,
+  huntAreas,
   listHunts,
   recordSighting,
   releaseClaim,
@@ -29,14 +30,14 @@ const hash = () =>
     b.toString(16).padStart(2, '0'),
   ).join('');
 
-async function huntableVehicle(city = 'İstanbul') {
+async function huntableVehicle(city = 'İstanbul', district = 'Üsküdar') {
   const partner = await activePartner({ default_kurus: 2_000_000, rules: [] });
   const view = unwrap(
     await upsertCase(
       db(),
       partner,
       caseInput({
-        places: [{ kind: 'owner_home', address: 'Gizli Sk. No:7', district: 'Üsküdar', city }],
+        places: [{ kind: 'owner_home', address: 'Gizli Sk. No:7', district, city }],
       }),
       'u',
       T0,
@@ -62,6 +63,30 @@ describe('hunts and claims', () => {
       areas: [{ district: 'Üsküdar', city: 'Kırşehir' }],
     });
     expect(JSON.stringify(hunt)).not.toContain('Gizli');
+  });
+
+  it('lists the places with vehicles open to the agent and narrows the list to one district', async () => {
+    await payoutRule();
+    const city = `Çankırı-${crypto.randomUUID().slice(0, 6)}`;
+    const merkez = await huntableVehicle(city, 'Merkez');
+    await huntableVehicle(city, 'Merkez');
+    const ilgaz = await huntableVehicle(city, 'Ilgaz');
+    const agent = await activeAgent();
+    const other = await activeAgent();
+    unwrap(await claimVehicle(db(), other, ilgaz.vehicleId, T0));
+    const areas = unwrap(await huntAreas(db(), agent, T0)).filter((a) => a.city === city);
+    // Ilgaz's only vehicle is claimed by someone else, so it isn't offered.
+    expect(areas).toEqual([{ city, district: 'Merkez', vehicles: 2 }]);
+    const inMerkez = unwrap(await listHunts(db(), agent, { city, district: 'Merkez' }, T0));
+    expect(inMerkez.map((h) => h.vehicle_id)).toContain(merkez.vehicleId);
+    expect(inMerkez).toHaveLength(2);
+    expect(unwrap(await listHunts(db(), agent, { city, district: 'Ilgaz' }, T0))).toEqual([]);
+    // A district without its city narrows nothing.
+    expect(
+      unwrap(await listHunts(db(), agent, { district: 'Merkez' }, T0)).length,
+    ).toBeGreaterThanOrEqual(2);
+    await setAgentStatus(db(), agent, 'suspended', 'staff-1', 'test', T0);
+    expect(await huntAreas(db(), agent, T0)).toMatchObject({ error: 'agent_not_active' });
   });
 
   it('keeps vehicles without a VIN, and agents who are not active, out', async () => {
