@@ -12,7 +12,7 @@
  * here means a new AGREEMENT_VERSION; agents who accepted an older version are asked again.
  */
 
-export const AGREEMENT_VERSION = '2026-11-28-taslak';
+export const AGREEMENT_VERSION = '2026-11-28-taslak-2';
 
 export type AgreementLocale = 'tr' | 'en';
 
@@ -238,7 +238,7 @@ const NOTICE: Record<AgreementLocale, AgreementText> = {
       {
         title: 'Saklama süreleri',
         paragraphs: [
-          'Adli sicil kaydı ve nüfus kayıt örneği dosyaları, Emanet inceleyip sonucu kaydettiği anda silinir; yalnızca inceleme sonucu ve tarihi tutulur. T.C. kimlik numaranız şifreli olarak ve yalnızca vergi belgelerinin düzenlenmesi için saklanır. Ödeme ve muhasebe kayıtları mevzuat gereği on yıl saklanır. Hesabınızı kapattığınızda, saklanması zorunlu olmayan verileriniz silinir.',
+          'Adli sicil kaydı ve nüfus kayıt örneği dosyaları, Emanet inceleyip sonucu kaydettiği anda silinir; yalnızca inceleme sonucu ve tarihi tutulur. T.C. kimlik numaranız şifreli olarak ve yalnızca vergi belgelerinin düzenlenmesi için saklanır. Ödeme ve muhasebe kayıtları mevzuat gereği on yıl saklanır. Hesabınızı kapattığınızda veya silme talebiniz yerine getirildiğinde, saklanması zorunlu olmayan verileriniz çalışan sistemlerden silinir. Silinen verilerin şifreli bir kopyası; hukuki yükümlülüklerin yerine getirilmesi, bir hakkın tesisi, kullanılması veya korunması amacıyla, ayrı ve erişimi kısıtlı bir arşivde en çok on yıl saklanır ve süre sonunda yok edilir. Bu arşive yalnızca yetkili yöneticiler, gerekçe yazarak erişebilir; her erişim kayıt altına alınır. Adli sicil kaydı dosyası bu arşive alınmaz.',
         ],
       },
       {
@@ -250,7 +250,7 @@ const NOTICE: Record<AgreementLocale, AgreementText> = {
       {
         title: 'Haklarınız',
         paragraphs: [
-          'Kanun’un 11. maddesi uyarınca verilerinizin işlenip işlenmediğini öğrenme, bilgi isteme, düzeltilmesini veya silinmesini isteme, işlemeye itiraz etme ve zararın giderilmesini talep etme haklarına sahipsiniz. Başvurularınızı iletisim@emanet.dev adresine veya emanet.dev/kvkk-basvuru sayfasındaki yöntemlerle iletebilirsiniz; en geç otuz gün içinde yanıtlanır.',
+          'Kanun’un 11. maddesi uyarınca verilerinizin işlenip işlenmediğini öğrenme, bilgi isteme, düzeltilmesini veya silinmesini isteme, işlemeye itiraz etme ve zararın giderilmesini talep etme haklarına sahipsiniz. Silme talebinizi Emanet Saha’da “Verilerim” sayfasından, diğer başvurularınızı iletisim@emanet.dev adresine veya emanet.dev/kvkk-basvuru sayfasındaki yöntemlerle iletebilirsiniz; en geç otuz gün içinde yanıtlanır.',
         ],
       },
     ],
@@ -278,7 +278,7 @@ const NOTICE: Record<AgreementLocale, AgreementText> = {
       {
         title: 'How long',
         paragraphs: [
-          'The files of your criminal record and population register extract are deleted the moment Emanet has checked them and recorded the result; only the result and its date are kept. Your national ID number is stored encrypted and only to issue tax documents. Payment and accounting records are kept ten years as the law requires. When you close your account, data that doesn’t have to be kept is erased.',
+          'The files of your criminal record and population register extract are deleted the moment Emanet has checked them and recorded the result; only the result and its date are kept. Your national ID number is stored encrypted and only to issue tax documents. Payment and accounting records are kept ten years as the law requires. When you close your account or your request to erase is carried out, data that doesn’t have to be kept is removed from the working systems. A sealed (encrypted) copy of what was removed is kept in a separate, restricted archive for at most ten years, to meet legal obligations and to establish, exercise or defend a right, and is destroyed when that period ends. Only authorised administrators can open it, by writing a reason, and every opening is recorded. The file of a criminal record is never put in this archive.',
         ],
       },
       {
@@ -290,7 +290,7 @@ const NOTICE: Record<AgreementLocale, AgreementText> = {
       {
         title: 'Your rights',
         paragraphs: [
-          'Under article 11 you may learn whether your data is processed, ask for information, ask for it to be corrected or erased, object, and claim compensation. Write to iletisim@emanet.dev or use the ways listed at emanet.dev/kvkk-basvuru; you are answered within thirty days at most.',
+          'Under article 11 you may learn whether your data is processed, ask for information, ask for it to be corrected or erased, object, and claim compensation. Ask for erasure on the “My data” page in Emanet Saha; for anything else write to iletisim@emanet.dev or use the ways listed at emanet.dev/kvkk-basvuru. You are answered within thirty days at most.',
         ],
       },
     ],

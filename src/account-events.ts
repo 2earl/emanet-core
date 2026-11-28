@@ -1,6 +1,6 @@
 import { auditStatement } from './audit';
 import { orphanReviewsStatement } from './claims';
-import { eraseAgentEvidenceStatement } from './privacy';
+import { eraseAgent } from './erasure';
 
 /**
  * What login tells Emanet when an account or an organization is deleted, and what it asks for
@@ -11,48 +11,12 @@ import { eraseAgentEvidenceStatement } from './privacy';
  * Everything else that identifies the person goes.
  */
 
-/** An agent's identity, bank account and claims go; their payouts and books stay. */
+/**
+ * An agent's identity, bank account and claims go; their payouts and books stay. A sealed copy
+ * of what went is archived (src/erasure.ts).
+ */
 export async function deleteUser(db: D1Database, userId: string, at: number): Promise<void> {
-  await db.batch([
-    db
-      .prepare(
-        `UPDATE claims SET closed_at = ?, close_reason = 'revoked'
-         WHERE agent_id = ? AND closed_at IS NULL`,
-      )
-      .bind(at, userId),
-    db
-      .prepare(
-        `UPDATE agents SET status = 'banned', legal_name = NULL, tckn_hash = NULL, city = NULL,
-           iban = NULL, iban_verified_at = NULL, vkn = NULL, phone = NULL, phone_verified_at = NULL,
-           email = NULL, email_verified_at = NULL, birth_year = NULL, review_note = NULL,
-           tckn_enc = CASE WHEN EXISTS (SELECT 1 FROM payouts p WHERE p.agent_id = agents.user_id AND p.status = 'sent') THEN tckn_enc ELSE NULL END,
-           address = CASE WHEN EXISTS (SELECT 1 FROM payouts p WHERE p.agent_id = agents.user_id AND p.status = 'sent') THEN address ELSE NULL END,
-           updated_at = ?
-         WHERE user_id = ?`,
-      )
-      .bind(at, userId),
-    db.prepare('DELETE FROM kyc_checks WHERE agent_id = ?').bind(userId),
-    db.prepare('DELETE FROM cooldowns WHERE agent_id = ?').bind(userId),
-    db.prepare('DELETE FROM agent_email_codes WHERE agent_id = ?').bind(userId),
-    orphanReviewsStatement(db, at),
-    // After the claims are closed above: photos of every claim that delivered nothing.
-    eraseAgentEvidenceStatement(db, userId, at),
-    // The applicant's e-Devlet documents: files queued for deletion, the rows go.
-    db
-      .prepare(
-        `INSERT INTO erased_files (file_ref, bucket, record_id, reason, requested_by, requested_at)
-         SELECT d.file_ref, 'evidence', d.id, 'account_deleted', 'system', ? FROM agent_documents d
-         WHERE d.agent_id = ? AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = d.file_ref)`,
-      )
-      .bind(at, userId),
-    db.prepare('DELETE FROM agent_documents WHERE agent_id = ?').bind(userId),
-    db
-      .prepare(
-        'UPDATE agent_acceptances SET withdrawn_at = ? WHERE agent_id = ? AND withdrawn_at IS NULL',
-      )
-      .bind(at, userId),
-    auditStatement(db, at, 'system', 'account.deleted', `agent:${userId}`),
-  ]);
+  await eraseAgent(db, 'system', userId, { reason: 'account deleted' }, at);
 }
 
 /** What Emanet holds about a person: as an agent, their record, claims and payouts. */

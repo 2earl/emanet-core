@@ -702,6 +702,37 @@ sales invoices with the buyer's tax details, receipts, payments sent to agents w
 tax number, address, gross, withholding and net, the journal line by line, totals, withholding by
 tax profile, and whose record lacks something. A finished month can be marked handed over.
 
+## 14. Asking for more, erasure on request, the sealed archive (2026-11-28)
+
+**Asking an applicant for more** (`src/agent-requests.ts`). Staff ask for one or more things at
+once: a detail to correct (name, ID number, phone, email, address, city, IBAN, tax details,
+something else) or a document (criminal record, population register extract, residence record,
+driving licence, tax certificate, bank proof, another document). Each is one request with staff's
+words to the agent and a time limit (`agent_request_days`, 14). A sent application returns to the
+applicant; an active agent keeps working, and a detail that is locked once active opens while
+staff ask for it. The agent answers each request in Emanet Saha: a document request by the upload,
+a detail by correcting it. Staff accept the answer, ask again, or withdraw the request. Nobody can
+send an application again with a request open, and nobody is activated with one unsettled. A
+requested document that can't be read or doesn't match is asked for again in the same step.
+
+**Erasure on request** (`src/erasure.ts`). An agent asks on the "My data" page; the request enters
+the register (§8) with its thirty-day limit and can be withdrawn until decided. An admin carries
+it out or refuses it with the reason the person is told. It waits while a payout is earned but not
+sent, since erasing removes the IBAN. Deleting the login account erases without asking.
+
+**The sealed archive.** Erasing removes everything that names the person from the working
+database and storage, and seals one copy (AES-256-GCM, the PII key, bound to the archive's ID)
+into `erasure_archive`: profile with the ID number, identity checks, document records,
+acceptances, requests. Documents still in storage are sealed and moved under `archive/`; the file
+of a criminal record is destroyed, never archived. The archive is kept `erasure_archive_days`
+(3650; the general limitation period, TBK 146), then its content and files are destroyed and
+only the line stays. Nothing in the product reads it. An admin opens one record or file at a
+time, must write a reason, and each opening is recorded (who, when, why) in
+`erasure_archive_views` and the audit log.
+
+This is restricted storage, not deletion in the sense of KVKK art. 7, and the agents' privacy
+notice says so. Its legal basis (art. 5/2-ç, 5/2-e) and its period are for the lawyer to confirm.
+
 ## Sources
 
 - İİK 88/7, vehicles handed to icra within 3 working days: av-saimincekas.com (İİK text)

@@ -64,12 +64,14 @@ function eraseStatement(
 export interface DueFile {
   file_ref: string;
   bucket: 'evidence' | 'documents';
+  /** Set when the file is sealed into this archive and moved, not destroyed. */
+  archive_id: string | null;
 }
 
 export async function filesDue(db: D1Database, limit = 100): Promise<DueFile[]> {
   const { results } = await db
     .prepare(
-      'SELECT file_ref, bucket FROM erased_files WHERE erased_at IS NULL ORDER BY requested_at LIMIT ?',
+      'SELECT file_ref, bucket, archive_id FROM erased_files WHERE erased_at IS NULL ORDER BY requested_at LIMIT ?',
     )
     .bind(Math.min(Math.max(limit, 1), 500))
     .all<DueFile>();
@@ -414,7 +416,7 @@ export interface PrivacyRequest {
   note: string | null;
   received_at: number;
   due_at: number;
-  status: 'open' | 'done' | 'refused';
+  status: 'open' | 'done' | 'refused' | 'withdrawn';
   outcome: string | null;
   created_by: string;
   closed_by: string | null;

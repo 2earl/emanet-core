@@ -13,6 +13,32 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import { auditStatement } from './audit';
 import { deleteOrganization, deleteUser, exportUser } from './account-events';
 import {
+  answeredRequests,
+  answerRequest,
+  askAgain,
+  askAgent,
+  pendingRequests,
+  requestsOf,
+  settleRequest,
+  type Ask,
+} from './agent-requests';
+import {
+  archiveFileStored,
+  archiveHasFile,
+  archiveViews,
+  eraseAgent,
+  erasureBlockers,
+  listArchives,
+  myErasure,
+  openArchive,
+  openArchiveFile,
+  purgeArchives,
+  refuseErasure,
+  requestErasure,
+  sealArchiveFile,
+  withdrawErasure,
+} from './erasure';
+import {
   agentProfile,
   earnings,
   myClaims,
@@ -89,7 +115,7 @@ import {
   noRegistry,
   requestEmailCode,
 } from './kyc';
-import { mailer, webhookDisabledMail, type MailLocale, type Send } from './mail';
+import { agentMail, mailer, webhookDisabledMail, type MailLocale, type Send } from './mail';
 import {
   alertOps,
   heartbeat,
@@ -556,12 +582,61 @@ export class FieldApi extends WorkerEntrypoint<Env> {
     return ok(await documentsOf(this.env.DB, agentId));
   }
 
-  /** One of the two e-Devlet documents, already stored by Emanet Saha. */
+  /** A document already stored by Emanet Saha: one of the two every applicant gives, or one staff asked for. */
   async addDocument(
     agentId: string,
-    input: { kind: string; file_ref: string; sha256: string; barcode: string },
+    input: {
+      kind: string;
+      file_ref: string;
+      sha256: string;
+      barcode?: string;
+      request_id?: string;
+    },
   ) {
     return addAgentDocument(this.env.DB, agentId, input, now());
+  }
+
+  // ---- What staff asked for (src/agent-requests.ts) ----
+
+  async requests(agentId: string) {
+    return ok(await requestsOf(this.env.DB, agentId));
+  }
+
+  /** The agent says a detail is corrected; a document request is answered by the upload. */
+  async answerRequest(agentId: string, requestId: string, answer: string) {
+    return answerRequest(this.env.DB, agentId, requestId, answer, now());
+  }
+
+  // ---- The agent's own data (src/erasure.ts) ----
+
+  /** The agent's latest request to be erased, and what erasing would stop. */
+  async erasure(agentId: string) {
+    const [request, blockers, settings] = await Promise.all([
+      myErasure(this.env.DB, agentId),
+      erasureBlockers(this.env.DB, agentId),
+      readSettings(this.env.DB),
+    ]);
+    return ok({
+      request,
+      blockers,
+      answer_days: settings.privacy_request_days,
+      archive_years: Math.max(1, Math.round(settings.erasure_archive_days / 365)),
+    });
+  }
+
+  async requestErasure(agentId: string, note: string) {
+    const result = await requestErasure(this.env.DB, agentId, note, now());
+    if (result.ok) {
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, agentId, {
+        kind: 'erasure_received',
+        days: result.value.days,
+      });
+    }
+    return result;
+  }
+
+  async withdrawErasure(agentId: string) {
+    return withdrawErasure(this.env.DB, agentId, now());
   }
 
   /**
@@ -584,6 +659,8 @@ export class FieldApi extends WorkerEntrypoint<Env> {
     ) {
       return fail('documents_missing');
     }
+    // Everything staff asked for is answered before the application goes back to them.
+    if ((await pendingRequests(this.env.DB, agentId)).open > 0) return fail('requests_open');
     const result = await submitApplication(this.env.DB, agentId, termsVersion, at);
     if (result.ok) {
       await recordAcceptance(this.env.DB, agentId, consents, locale, at);
@@ -809,6 +886,8 @@ export class ControlApi extends WorkerEntrypoint<Env> {
       ) {
         return fail('documents_not_verified');
       }
+      const pending = await pendingRequests(this.env.DB, agentId);
+      if (pending.open + pending.answered > 0) return fail('requests_pending');
       if (settings.require_signoffs === 1) {
         const ready = await readiness(this.env.DB, Boolean(this.env.PII_KEY));
         if (!ready.agents_ready) return fail('not_ready', 'agents');
@@ -1105,13 +1184,174 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return ok(file);
   }
 
-  /** Staff verified the document at e-Devlet; the file is deleted with the decision. */
+  /** Staff verified the document; the file is deleted with the decision. */
   async decideDocument(
     staffId: string,
     documentId: string,
     input: { outcome: string; note?: string },
   ) {
-    return decideDocument(this.env.DB, staffId, documentId, input, now());
+    const result = await decideDocument(this.env.DB, staffId, documentId, input, now());
+    // A requested document that can't be used is asked for again: the agent is told.
+    if (result.ok && result.value.asked_again && result.value.request_id) {
+      const request = await this.env.DB.prepare('SELECT note FROM agent_requests WHERE id = ?')
+        .bind(result.value.request_id)
+        .first<{ note: string }>();
+      const settings = await readSettings(this.env.DB);
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, result.value.agent_id, {
+        kind: 'requested',
+        items: request ? [request.note] : [],
+        days: settings.agent_request_days,
+      });
+    }
+    return result;
+  }
+
+  // ---- Asking an agent for more (src/agent-requests.ts) ----
+
+  /** Asks for details or documents; a sent application returns to the applicant. The agent is mailed. */
+  async askAgent(staffId: string, agentId: string, asks: Ask[]) {
+    const settings = await readSettings(this.env.DB);
+    const result = await askAgent(
+      this.env.DB,
+      staffId,
+      agentId,
+      asks,
+      settings.agent_request_days,
+      now(),
+    );
+    if (result.ok) {
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, agentId, {
+        kind: 'requested',
+        items: result.value.notes,
+        days: settings.agent_request_days,
+      });
+    }
+    return result;
+  }
+
+  async agentRequests(agentId: string) {
+    return ok(await requestsOf(this.env.DB, agentId));
+  }
+
+  /** Accepts an answer (`accepted`) or withdraws a request (`cancelled`). */
+  async settleAgentRequest(staffId: string, requestId: string, status: string) {
+    return settleRequest(this.env.DB, staffId, requestId, status, now());
+  }
+
+  async askAgentAgain(staffId: string, requestId: string, note: string) {
+    const settings = await readSettings(this.env.DB);
+    const result = await askAgain(
+      this.env.DB,
+      staffId,
+      requestId,
+      note,
+      settings.agent_request_days,
+      now(),
+    );
+    if (result.ok) {
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, result.value.agent_id, {
+        kind: 'requested',
+        items: [result.value.note],
+        days: settings.agent_request_days,
+      });
+    }
+    return result;
+  }
+
+  /** Answers from agents that wait for staff. */
+  async answeredRequests() {
+    return ok(await answeredRequests(this.env.DB));
+  }
+
+  // ---- Erasing an agent, and the sealed archive (src/erasure.ts). Admins only: the app checks. ----
+
+  /** What erasing this agent would stop, and their request if they made one. */
+  async erasureOverview(agentId: string) {
+    const [request, blockers] = await Promise.all([
+      myErasure(this.env.DB, agentId),
+      erasureBlockers(this.env.DB, agentId),
+    ]);
+    return ok({ request, blockers });
+  }
+
+  /** Erases the agent's personal data and seals a copy. The person is told at the address they had. */
+  async eraseAgent(
+    staffId: string,
+    agentId: string,
+    input: { reason: string; requestId?: string },
+  ) {
+    const result = await eraseAgent(this.env.DB, `staff:${staffId}`, agentId, input, now());
+    if (result.ok && result.value.email) {
+      try {
+        const settings = await readSettings(this.env.DB);
+        if (settings.agent_mail === 1) {
+          await this.send(
+            agentMail(
+              result.value.locale === 'en' ? 'en' : 'tr',
+              result.value.email,
+              { kind: 'erasure_done', years: result.value.years },
+              this.env.SAHA_ORIGIN,
+            ),
+          );
+        }
+      } catch {
+        // The erasure stands whether or not the mail went.
+      }
+    }
+    return result.ok ? ok({ archive_id: result.value.archive_id }) : result;
+  }
+
+  async refuseErasure(staffId: string, requestId: string, reason: string) {
+    const result = await refuseErasure(this.env.DB, staffId, requestId, reason, now());
+    if (result.ok) {
+      await notifyAgent(this.env.DB, this.send, this.env.SAHA_ORIGIN, result.value.agent_id, {
+        kind: 'erasure_refused',
+        reason: result.value.reason,
+      });
+    }
+    return result;
+  }
+
+  /** The archive's lines, never their content. */
+  async archives(term = '') {
+    return ok(await listArchives(this.env.DB, term));
+  }
+
+  async archiveViews(archiveId: string) {
+    return ok(await archiveViews(this.env.DB, archiveId));
+  }
+
+  /** Opens one sealed record; the reason is recorded first. */
+  async openArchive(staffId: string, archiveId: string, reason: string) {
+    return openArchive(this.env.DB, staffId, archiveId, reason, now());
+  }
+
+  async archiveHasFile(archiveId: string, ref: string) {
+    return ok(await archiveHasFile(this.env.DB, archiveId, ref));
+  }
+
+  /** Opens one sealed file Emanet Merkez read from storage; the reason is recorded first. */
+  async openArchiveFile(
+    staffId: string,
+    archiveId: string,
+    ref: string,
+    reason: string,
+    bytes: ArrayBuffer,
+  ) {
+    return openArchiveFile(this.env.DB, staffId, archiveId, ref, reason, bytes, now());
+  }
+
+  /** For Emanet Merkez's cron: seals a file on its way into the archive. */
+  async sealArchiveFile(archiveId: string, fileRef: string, bytes: ArrayBuffer) {
+    return sealArchiveFile(this.env.DB, archiveId, fileRef, bytes);
+  }
+
+  async archiveFileStored(
+    archiveId: string,
+    fileRef: string,
+    stored: { ref: string; type: string; size: number },
+  ) {
+    return archiveFileStored(this.env.DB, archiveId, fileRef, stored, now());
   }
 
   // ---- Ready for the first customer (docs/DESIGN.md §13) ----
@@ -1284,6 +1524,7 @@ export default {
       ['notices', () => sendNotices(env.DB, mailer(env), env.KURUMSAL_ORIGIN, at)],
       ['retention', () => redactClosedCasePlaces(env.DB, at)],
       ['fileRetention', () => scheduleRetention(env.DB, at)],
+      ['archiveRetention', () => purgeArchives(env.DB, at)],
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
       ['alerts', () => alertOps(env.DB, mailer(env), env.STAFF_EMAIL, env.MERKEZ_ORIGIN, at)],
     ];
