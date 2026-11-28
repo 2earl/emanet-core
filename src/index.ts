@@ -40,6 +40,7 @@ import {
   withdrawErasure,
 } from './erasure';
 import { listHolds, placeHold, releaseHold } from './holds';
+import { retentionOverview } from './retention';
 import {
   agentProfile,
   earnings,
@@ -1371,6 +1372,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   async releaseHold(staffId: string, holdId: string, reason: string) {
     return releaseHold(this.env.DB, staffId, holdId, reason, now());
+  }
+
+  /** What the cron deletes on its own, by kind of data, and how many records the next run takes. */
+  async retentionOverview() {
+    return ok(await retentionOverview(this.env.DB, now()));
   }
 
   async holds() {
