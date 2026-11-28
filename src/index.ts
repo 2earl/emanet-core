@@ -53,6 +53,8 @@ import {
   saveReply,
   savedReplies,
   purgeSupport,
+  answerTimes,
+  typicalAnswer,
   replyAsRequester,
   requesterContact,
   setTicketStatus,
@@ -400,6 +402,11 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
   }
 
   // ---- Support desk (docs/DESIGN.md §20) ----
+
+  /** How soon companies' questions are usually answered (null until there are enough). */
+  async supportAnswerTime() {
+    return ok(await typicalAnswer(this.env.DB, 'partner', now()));
+  }
 
   async openTicket(
     orgId: string,
@@ -801,6 +808,11 @@ export class FieldApi extends WorkerEntrypoint<Env> {
   }
 
   // ---- Support desk (docs/DESIGN.md §20) ----
+
+  /** How soon agents' questions are usually answered (null until there are enough). */
+  async supportAnswerTime() {
+    return ok(await typicalAnswer(this.env.DB, 'agent', now()));
+  }
 
   async openTicket(
     agentId: string,
@@ -1542,6 +1554,11 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     mine?: string;
   }) {
     return ok(await staffTickets(this.env.DB, filter));
+  }
+
+  /** First-answer times over the last 30 days, per side and category. */
+  async supportTimes() {
+    return ok(await answerTimes(this.env.DB, now()));
   }
 
   async supportTicket(ticketId: string) {

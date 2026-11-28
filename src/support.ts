@@ -5,8 +5,8 @@
  * staff, `answered` while it waits for the requester, and `closed` when done.
  *
  * It holds what people wrote, so it has a retention period (`support_retention_days` after it
- * closes) and a legal hold on an agent keeps their tickets. No attachments yet: a photo or a
- * document goes through the flows that already protect them (requests, evidence).
+ * closes) and a legal hold on an agent keeps their tickets. A message may carry up to three
+ * files (photos or PDFs), stored by the apps and recorded here.
  */
 import { auditStatement } from './audit';
 import { fail, newId, ok, type Result } from './result';
@@ -550,6 +550,106 @@ export async function purgeSupport(db: D1Database, at: number): Promise<number> 
     auditStatement(db, at, 'system', 'retention.support_purged', 'support_tickets', { tickets: n }),
   ]);
   return n;
+}
+
+// ---- Answer times ---------------------------------------------------------------------------
+
+/** How far back answer times look. */
+export const TIMES_DAYS = 30;
+/** Fewer first answers than this and no "usually within" is shown to requesters. */
+export const TIMES_MIN = 10;
+
+export interface AnswerTimes {
+  kind: RequesterKind;
+  /** null: the whole side. */
+  category: string | null;
+  opened: number;
+  answered: number;
+  /** Not answered yet and not closed. */
+  waiting: number;
+  /** Seconds to the first staff answer; a ticket still waiting counts with the time it has waited so far. */
+  median: number | null;
+  p75: number | null;
+  /** Share answered within a day, 0..1. */
+  within_day: number | null;
+}
+
+/** The value below which `q` of the sorted list falls (nearest rank). */
+const rank = (sorted: number[], q: number): number | null =>
+  sorted.length === 0
+    ? null
+    : (sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)] ?? null);
+
+function summarise(
+  kind: RequesterKind,
+  category: string | null,
+  rows: { first_response_at: number | null; created_at: number; status: TicketStatus }[],
+  at: number,
+): AnswerTimes {
+  const answered = rows.filter((r) => r.first_response_at !== null);
+  const waiting = rows.filter((r) => r.first_response_at === null && r.status !== 'closed');
+  // A ticket the requester closed before anyone answered tells nothing about our speed.
+  const times = [
+    ...answered.map((r) => (r.first_response_at ?? r.created_at) - r.created_at),
+    ...waiting.map((r) => at - r.created_at),
+  ].sort((a, b) => a - b);
+  return {
+    kind,
+    category,
+    opened: rows.length,
+    answered: answered.length,
+    waiting: waiting.length,
+    median: rank(times, 0.5),
+    p75: rank(times, 0.75),
+    within_day: times.length === 0 ? null : times.filter((t) => t <= DAY).length / times.length,
+  };
+}
+
+/**
+ * First-answer times of the tickets opened in the last `TIMES_DAYS` days: each side as a whole,
+ * then each category with tickets, in the categories' order. For Merkez → Support.
+ */
+export async function answerTimes(db: D1Database, at: number): Promise<AnswerTimes[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT requester_kind, category, status, created_at, first_response_at FROM support_tickets
+       WHERE created_at > ? AND created_at <= ?`,
+    )
+    .bind(at - TIMES_DAYS * DAY, at)
+    .all<{
+      requester_kind: RequesterKind;
+      category: string;
+      status: TicketStatus;
+      created_at: number;
+      first_response_at: number | null;
+    }>();
+  const out: AnswerTimes[] = [];
+  for (const kind of ['agent', 'partner'] as const) {
+    const side = results.filter((r) => r.requester_kind === kind);
+    out.push(summarise(kind, null, side, at));
+    for (const category of CATEGORIES[kind]) {
+      const rows = side.filter((r) => r.category === category);
+      if (rows.length > 0) out.push(summarise(kind, category, rows, at));
+    }
+  }
+  return out;
+}
+
+/**
+ * What a requester is told before writing: the time within which three in four questions from
+ * their side got a first answer lately, in seconds. null until there are `TIMES_MIN` answers, so
+ * a quiet month never shows a number that two tickets made.
+ */
+export async function typicalAnswer(
+  db: D1Database,
+  kind: RequesterKind,
+  at: number,
+): Promise<{ p75: number | null; days: number }> {
+  const side = (await answerTimes(db, at)).find((t) => t.kind === kind && t.category === null);
+  return {
+    p75: side && side.answered >= TIMES_MIN ? side.p75 : null,
+    days: TIMES_DAYS,
+  };
 }
 
 // ---- Saved replies ---------------------------------------------------------------------------
