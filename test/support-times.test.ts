@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   answerTimes,
   openTicket,
+  rateTicket,
   setTicketStatus,
   staffReply,
   typicalAnswer,
@@ -84,5 +85,37 @@ describe('answer times', () => {
     await answered('partner', 'case', AT - 86_400, 2 * HOUR);
     // Ten answers: 1, 2, 2, 3 … 9 h; three in four within 7 h.
     expect(await typicalAnswer(db(), 'partner', AT)).toEqual({ p75: 7 * HOUR, days: 30 });
+  });
+});
+
+describe('did the answer help', () => {
+  it('takes one changeable mark per answered ticket from its own requester, and counts it', async () => {
+    const ref = crypto.randomUUID();
+    const { id } = unwrap(
+      await openTicket(
+        db(),
+        'agent',
+        ref,
+        ref,
+        { subject: 'Ödeme', category: 'delivery', message: 'Merhaba, ne zaman?' },
+        AT - HOUR * 5,
+      ),
+    );
+    // Nothing to mark before staff answered, and never on someone else's ticket.
+    expect(await rateTicket(db(), 'agent', ref, ref, id, true, AT - HOUR * 4)).toEqual({
+      ok: false,
+      error: 'not_answered',
+    });
+    unwrap(await staffReply(db(), 'staff-1', id, 'Yarın.', false, AT - HOUR * 3));
+    expect(await rateTicket(db(), 'agent', 'someone-else', 'x', id, true, AT)).toEqual({
+      ok: false,
+      error: 'not_found',
+    });
+    unwrap(await rateTicket(db(), 'agent', ref, ref, id, false, AT - HOUR * 2));
+    unwrap(await rateTicket(db(), 'agent', ref, ref, id, true, AT - HOUR));
+    const delivery = (await answerTimes(db(), AT)).find(
+      (t) => t.kind === 'agent' && t.category === 'delivery',
+    );
+    expect(delivery).toMatchObject({ rated: 1, helped: 1 });
   });
 });
