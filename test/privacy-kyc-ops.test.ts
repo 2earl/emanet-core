@@ -561,7 +561,7 @@ describe('operations', () => {
     expect(
       await alertOps(db(), mail.send, 'ops@example.com', 'https://merkez.example', T0 + 20),
     ).toBe(1);
-    expect(mail.sent[0]?.paragraphs.join(' ')).toContain('saha: GET /claims/:id × 1');
+    expect(mail.sent[0]?.rows?.map((row) => row.label)).toContain('saha: GET /claims/:id × 1');
     // Told once; a new error within the hour waits.
     await recordOps(db(), 'merkez', 'error', 'POST /money/receipts', 'Error', T0 + 100);
     expect(

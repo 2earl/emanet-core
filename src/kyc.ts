@@ -16,6 +16,7 @@ import { auditStatement } from './audit';
 import { emailCodeMail, type MailLocale, type Send } from './mail';
 import { keyedHash } from './pii';
 import { fail, newId, ok, type Result } from './result';
+import { readSettings } from './settings';
 
 /** 11 digits, not starting with 0, with the two check digits the registry's algorithm gives. */
 export function validTckn(value: string): boolean {
@@ -105,7 +106,6 @@ export function kycStatement(
 // ---- Email ---------------------------------------------------------------------------------------
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const CODE_MINUTES = 15;
 const RESEND_SECONDS = 60;
 const MAX_ATTEMPTS = 5;
 
@@ -140,6 +140,7 @@ export async function requestEmailCode(
     .bind(agentId)
     .first<{ sent_at: number }>();
   if (last && at - last.sent_at < RESEND_SECONDS) return fail('sent_recently');
+  const minutes = (await readSettings(db)).email_code_minutes;
   const code = String((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 1_000_000).padStart(
     6,
     '0',
@@ -151,15 +152,11 @@ export async function requestEmailCode(
        ON CONFLICT (agent_id) DO UPDATE SET email = excluded.email, code_hash = excluded.code_hash,
          attempts = 0, sent_at = excluded.sent_at, expires_at = excluded.expires_at`,
     )
-    .bind(
-      agentId,
-      email,
-      await keyedHash(`email-code:${agentId}`, code),
-      at,
-      at + CODE_MINUTES * 60,
-    )
+    .bind(agentId, email, await keyedHash(`email-code:${agentId}`, code), at, at + minutes * 60)
     .run();
-  const sent = await send(emailCodeMail(input.locale === 'en' ? 'en' : 'tr', email, code));
+  const locale = input.locale === 'en' ? 'en' : 'tr';
+  await db.prepare('UPDATE agents SET locale = ? WHERE user_id = ?').bind(locale, agentId).run();
+  const sent = await send(emailCodeMail(locale, email, code, minutes));
   return sent ? ok({ email }) : fail('email_not_sent');
 }
 

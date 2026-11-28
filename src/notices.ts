@@ -5,6 +5,7 @@
  * delivery is mailed once. Run by the cron.
  */
 import { deliveredMail, expiringMail, type MailLocale, type Send } from './mail';
+import { readSettings } from './settings';
 
 const HOUR = 3600;
 const DAY = 24 * HOUR;
@@ -27,6 +28,7 @@ export async function sendNotices(
   kurumsal: string,
   at: number,
 ): Promise<{ delivered: number; expiring: number }> {
+  const warning = (await readSettings(db)).expiry_warning_days * DAY;
   const { results: targets } = await db
     .prepare(
       `SELECT p.id, p.legal_name, p.org_id, p.contact_email, o.locale,
@@ -92,11 +94,19 @@ export async function sendNotices(
           `SELECT count(*) AS n, min(expires_at) AS first FROM cases
            WHERE partner_id = ? AND status = 'active' AND expires_at > ? AND expires_at <= ?`,
         )
-        .bind(t.id, at, at + EXPIRY_WARNING)
+        .bind(t.id, at, at + warning)
         .first<{ n: number; first: number | null }>();
       if (soon && soon.n > 0 && soon.first !== null) {
         const sent = await send(
-          expiringMail(locale, t.contact_email, t.legal_name, soon.n, soon.first, base),
+          expiringMail(
+            locale,
+            t.contact_email,
+            t.legal_name,
+            soon.n,
+            soon.first,
+            base,
+            warning / DAY,
+          ),
         );
         if (sent) {
           await db

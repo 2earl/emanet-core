@@ -36,6 +36,8 @@ export interface AgentProfile {
   submitted_at: number | null;
   strikes: number;
   open_claims: number;
+  /** What staff asked the applicant to correct, while the application is back with them. */
+  review_note: string | null;
 }
 
 export async function agentProfile(db: D1Database, agentId: string): Promise<Result<AgentProfile>> {
@@ -43,6 +45,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     .prepare(
       `SELECT status, legal_name, city, phone, iban, iban_verified_at, tax_profile, vkn,
          terms_version, submitted_at, strikes, email, email_verified_at, tckn_hash, birth_year,
+         review_note,
          (SELECT count(*) FROM claims WHERE agent_id = a.user_id AND closed_at IS NULL) AS open_claims
        FROM agents a WHERE user_id = ?`,
     )
@@ -64,6 +67,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
       email_verified_at: number | null;
       tckn_hash: string | null;
       birth_year: number | null;
+      review_note: string | null;
     }>();
   if (!row) return fail('not_found');
   return ok({
@@ -82,6 +86,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     current_terms: TERMS_VERSION,
     submitted_at: row.submitted_at,
     strikes: row.strikes,
+    review_note: row.status === 'applied' ? row.review_note : null,
     open_claims: row.open_claims,
   });
 }
@@ -269,7 +274,7 @@ export async function submitApplication(
     db
       .prepare(
         `UPDATE agents SET status = 'kyc_pending', terms_version = ?, terms_accepted_at = ?,
-           submitted_at = ?, updated_at = ?
+           submitted_at = ?, updated_at = ?, review_note = NULL
          WHERE user_id = ? AND status = 'applied'`,
       )
       .bind(termsVersion, at, at, at, agentId),
