@@ -18,6 +18,7 @@ import {
   askAgain,
   askAgent,
   pendingRequests,
+  remindRequests,
   requestsOf,
   settleRequest,
   type Ask,
@@ -1531,6 +1532,20 @@ export default {
       ['retention', () => redactClosedCasePlaces(env.DB, at)],
       ['fileRetention', () => scheduleRetention(env.DB, at)],
       ['archiveRetention', () => purgeArchives(env.DB, at)],
+      [
+        'requestReminders',
+        () =>
+          remindRequests(
+            env.DB,
+            (agentId, items, days) =>
+              notifyAgent(env.DB, mailer(env), env.SAHA_ORIGIN, agentId, {
+                kind: 'request_reminder',
+                items,
+                days,
+              }),
+            at,
+          ),
+      ],
       ['serviceLevels', () => watchServiceLevels(env.DB, at)],
       ['alerts', () => alertOps(env.DB, mailer(env), env.STAFF_EMAIL, env.MERKEZ_ORIGIN, at)],
     ];

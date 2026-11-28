@@ -281,3 +281,52 @@ export async function answeredRequests(db: D1Database, limit = 50): Promise<Answ
     .all<AnsweredRequest>();
   return results;
 }
+
+/** A reminder goes out this long before an open request's time limit. */
+const REMIND_BEFORE = 3 * 86_400;
+
+/**
+ * Reminds each agent once, a few days before the time limit, of the requests still waiting for
+ * them. The request is marked first, so a failing mail is never sent twice. Returns the number of
+ * agents reminded.
+ */
+export async function remindRequests(
+  db: D1Database,
+  send: (agentId: string, items: string[], daysLeft: number) => Promise<boolean>,
+  at: number,
+): Promise<number> {
+  const { results } = await db
+    .prepare(
+      `SELECT r.id, r.agent_id, r.note, r.due_at FROM agent_requests r
+       JOIN agents a ON a.user_id = r.agent_id
+       WHERE r.status = 'open' AND r.reminded_at IS NULL AND r.due_at > ? AND r.due_at <= ?
+         AND a.erased_at IS NULL
+       ORDER BY r.agent_id, r.created_at LIMIT 200`,
+    )
+    .bind(at, at + REMIND_BEFORE)
+    .all<{ id: string; agent_id: string; note: string; due_at: number }>();
+  const byAgent = new Map<string, { notes: string[]; due: number; ids: string[] }>();
+  for (const row of results) {
+    const entry = byAgent.get(row.agent_id) ?? { notes: [], due: row.due_at, ids: [] };
+    entry.notes.push(row.note);
+    entry.ids.push(row.id);
+    entry.due = Math.min(entry.due, row.due_at);
+    byAgent.set(row.agent_id, entry);
+  }
+  let reminded = 0;
+  for (const [agentId, entry] of byAgent) {
+    const marked = await db.batch(
+      entry.ids.map((id) =>
+        db
+          .prepare(
+            `UPDATE agent_requests SET reminded_at = ? WHERE id = ? AND reminded_at IS NULL AND status = 'open'`,
+          )
+          .bind(at, id),
+      ),
+    );
+    if (marked.some((result) => result.meta.changes !== 1)) continue;
+    const daysLeft = Math.max(1, Math.ceil((entry.due - at) / 86_400));
+    if (await send(agentId, entry.notes, daysLeft)) reminded++;
+  }
+  return reminded;
+}
