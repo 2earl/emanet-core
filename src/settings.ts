@@ -54,6 +54,8 @@ export const SETTINGS = {
   email_code_minutes: spec('agents', 'minutes', 15, 5, 120),
   /** Whether agents are emailed about decisions on their application, deliveries and payouts. */
   agent_mail: spec('agents', 'switch', 1, 0, 1),
+  /** Whether an application needs the two e-Devlet documents, and activation needs them verified. */
+  require_documents: spec('agents', 'switch', 1, 0, 1),
 
   // ---- Partners ----
   /** How long an invitation to a company works. */
@@ -96,6 +98,8 @@ export const SETTINGS = {
   alert_interval_minutes: spec('operations', 'minutes', 60, 15, 24 * 60),
   /** How long recorded errors are kept. */
   ops_keep_days: spec('operations', 'days', 30, 7, 365),
+  /** Whether admitting a company or an agent needs the lawyer's and accountant's sign-offs. */
+  require_signoffs: spec('operations', 'switch', 1, 0, 1),
 } as const satisfies Record<string, SettingSpec>;
 
 export type SettingKey = keyof typeof SETTINGS;

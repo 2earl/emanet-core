@@ -24,7 +24,10 @@ export async function deleteUser(db: D1Database, userId: string, at: number): Pr
       .prepare(
         `UPDATE agents SET status = 'banned', legal_name = NULL, tckn_hash = NULL, city = NULL,
            iban = NULL, iban_verified_at = NULL, vkn = NULL, phone = NULL, phone_verified_at = NULL,
-           email = NULL, email_verified_at = NULL, birth_year = NULL, updated_at = ?
+           email = NULL, email_verified_at = NULL, birth_year = NULL, review_note = NULL,
+           tckn_enc = CASE WHEN EXISTS (SELECT 1 FROM payouts p WHERE p.agent_id = agents.user_id AND p.status = 'sent') THEN tckn_enc ELSE NULL END,
+           address = CASE WHEN EXISTS (SELECT 1 FROM payouts p WHERE p.agent_id = agents.user_id AND p.status = 'sent') THEN address ELSE NULL END,
+           updated_at = ?
          WHERE user_id = ?`,
       )
       .bind(at, userId),
@@ -34,6 +37,20 @@ export async function deleteUser(db: D1Database, userId: string, at: number): Pr
     orphanReviewsStatement(db, at),
     // After the claims are closed above: photos of every claim that delivered nothing.
     eraseAgentEvidenceStatement(db, userId, at),
+    // The applicant's e-Devlet documents: files queued for deletion, the rows go.
+    db
+      .prepare(
+        `INSERT INTO erased_files (file_ref, bucket, record_id, reason, requested_by, requested_at)
+         SELECT d.file_ref, 'evidence', d.id, 'account_deleted', 'system', ? FROM agent_documents d
+         WHERE d.agent_id = ? AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = d.file_ref)`,
+      )
+      .bind(at, userId),
+    db.prepare('DELETE FROM agent_documents WHERE agent_id = ?').bind(userId),
+    db
+      .prepare(
+        'UPDATE agent_acceptances SET withdrawn_at = ? WHERE agent_id = ? AND withdrawn_at IS NULL',
+      )
+      .bind(at, userId),
     auditStatement(db, at, 'system', 'account.deleted', `agent:${userId}`),
   ]);
 }
