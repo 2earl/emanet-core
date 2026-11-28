@@ -40,11 +40,78 @@ export interface Ticket {
   closed_at: number | null;
 }
 
+export interface Attachment {
+  id: string;
+  name: string;
+  content_type: string;
+  size: number;
+}
+
 export interface TicketMessage {
   id: string;
   author_kind: 'requester' | 'staff' | 'note';
   body: string;
   created_at: number;
+  attachments: Attachment[];
+}
+
+/** A file the app has put in the evidence bucket under `support/<uuid>`, to be recorded here. */
+export interface AttachmentInput {
+  file_ref: string;
+  name: string;
+  content_type: string;
+  size: number;
+  sha256: string;
+}
+
+/** At most three files a message, each a photo or a PDF of at most 10 MB. */
+export const ATTACHMENT_LIMIT = 3;
+export const ATTACHMENT_BYTES = 10 * 1024 * 1024;
+export const ATTACHMENT_TYPES: readonly string[] = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'application/pdf',
+];
+
+function checkAttachments(list: AttachmentInput[] | undefined): Result<AttachmentInput[]> {
+  const files = list ?? [];
+  if (files.length > ATTACHMENT_LIMIT) return fail('too_many_files');
+  for (const f of files) {
+    if (!/^support\/[0-9a-f-]{36}$/.test(f.file_ref)) return fail('invalid_file');
+    if (!ATTACHMENT_TYPES.includes(f.content_type)) return fail('file_type');
+    if (!Number.isInteger(f.size) || f.size <= 0 || f.size > ATTACHMENT_BYTES)
+      return fail('file_too_large');
+    if (!/^[0-9a-f]{64}$/.test(f.sha256)) return fail('invalid_file');
+  }
+  return ok(
+    files.map((f) => ({
+      ...f,
+      // A name to show, never a path: letters, digits and a few marks, at most 80.
+      name:
+        (f.name.split(/[\\/]/).pop() ?? 'file').replace(/[^\p{L}\p{N} ._()-]/gu, '').slice(0, 80) ||
+        'file',
+    })),
+  );
+}
+
+function attachmentStatements(
+  db: D1Database,
+  ticketId: string,
+  messageId: string,
+  files: AttachmentInput[],
+  at: number,
+): D1PreparedStatement[] {
+  return files.map((f) =>
+    db
+      .prepare(
+        `INSERT INTO support_attachments (id, ticket_id, message_id, file_ref, name, content_type, size, sha256, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(newId(), ticketId, messageId, f.file_ref, f.name, f.content_type, f.size, f.sha256, at),
+  );
 }
 
 export interface TicketThread {
@@ -66,7 +133,7 @@ export async function openTicket(
   kind: RequesterKind,
   ref: string,
   userId: string,
-  input: { subject: string; category: string; message: string },
+  input: { subject: string; category: string; message: string; attachments?: AttachmentInput[] },
   at: number,
 ): Promise<Result<{ id: string }>> {
   const subject = text(input.subject, 3, 120);
@@ -74,6 +141,8 @@ export async function openTicket(
   if (!subject) return fail('invalid_subject');
   if (!message) return fail('invalid_message');
   if (!CATEGORIES[kind].includes(input.category)) return fail('invalid_category');
+  const files = checkAttachments(input.attachments);
+  if (!files.ok) return files;
   const open = await db
     .prepare(
       `SELECT count(*) AS n FROM support_tickets
@@ -83,6 +152,7 @@ export async function openTicket(
     .first<{ n: number }>();
   if ((open?.n ?? 0) >= OPEN_LIMIT) return fail('too_many_open');
   const id = newId();
+  const messageId = newId();
   await db.batch([
     db
       .prepare(
@@ -95,7 +165,8 @@ export async function openTicket(
         `INSERT INTO support_messages (id, ticket_id, author_kind, author, body, created_at)
          VALUES (?, ?, 'requester', ?, ?, ?)`,
       )
-      .bind(newId(), id, userId, message, at),
+      .bind(messageId, id, userId, message, at),
+    ...attachmentStatements(db, id, messageId, files.value, at),
     auditStatement(db, at, `${kind}:${userId}`, 'support.opened', `ticket:${id}`, {
       category: input.category,
     }),
@@ -129,14 +200,31 @@ async function thread(
     .bind(...binds)
     .first<Ticket>();
   if (!ticket) return null;
-  const { results } = await db
-    .prepare(
-      `SELECT id, author_kind, body, created_at FROM support_messages
-       WHERE ticket_id = ? ${withNotes ? '' : "AND author_kind != 'note'"} ORDER BY created_at, rowid`,
-    )
-    .bind(ticket.id)
-    .all<TicketMessage>();
-  return { ticket, messages: results };
+  const [messages, files] = await Promise.all([
+    db
+      .prepare(
+        `SELECT id, author_kind, body, created_at FROM support_messages
+         WHERE ticket_id = ? ${withNotes ? '' : "AND author_kind != 'note'"} ORDER BY created_at, rowid`,
+      )
+      .bind(ticket.id)
+      .all<Omit<TicketMessage, 'attachments'>>(),
+    db
+      .prepare(
+        `SELECT id, message_id, name, content_type, size FROM support_attachments
+         WHERE ticket_id = ? ORDER BY created_at, rowid`,
+      )
+      .bind(ticket.id)
+      .all<Attachment & { message_id: string }>(),
+  ]);
+  return {
+    ticket,
+    messages: messages.results.map((m) => ({
+      ...m,
+      attachments: files.results
+        .filter((f) => f.message_id === m.id)
+        .map(({ id, name, content_type, size }) => ({ id, name, content_type, size })),
+    })),
+  };
 }
 
 /** A requester reads only their own ticket, and never a staff note. */
@@ -163,9 +251,12 @@ export async function replyAsRequester(
   id: string,
   body: string,
   at: number,
+  attachments: AttachmentInput[] = [],
 ): Promise<Result<null>> {
   const message = text(body, 2, 4000);
   if (!message) return fail('invalid_message');
+  const files = checkAttachments(attachments);
+  if (!files.ok) return files;
   const ticket = await db
     .prepare(
       'SELECT status, closed_at FROM support_tickets WHERE id = ? AND requester_kind = ? AND requester_ref = ?',
@@ -186,13 +277,15 @@ export async function replyAsRequester(
       .first<{ n: number }>();
     if ((open?.n ?? 0) >= OPEN_LIMIT) return fail('too_many_open');
   }
+  const messageId = newId();
   await db.batch([
     db
       .prepare(
         `INSERT INTO support_messages (id, ticket_id, author_kind, author, body, created_at)
          VALUES (?, ?, 'requester', ?, ?, ?)`,
       )
-      .bind(newId(), id, userId, message, at),
+      .bind(messageId, id, userId, message, at),
+    ...attachmentStatements(db, id, messageId, files.value, at),
     db
       .prepare(
         `UPDATE support_tickets SET status = 'open', closed_at = NULL, updated_at = ? WHERE id = ?`,
@@ -296,21 +389,26 @@ export async function staffReply(
   body: string,
   note: boolean,
   at: number,
+  attachments: AttachmentInput[] = [],
 ): Promise<Result<{ notify: boolean }>> {
   const message = text(body, 2, 4000);
   if (!message) return fail('invalid_message');
+  const files = checkAttachments(attachments);
+  if (!files.ok) return files;
   const ticket = await db
     .prepare('SELECT status FROM support_tickets WHERE id = ?')
     .bind(id)
     .first<{ status: TicketStatus }>();
   if (!ticket) return fail('not_found');
+  const messageId = newId();
   const statements = [
     db
       .prepare(
         `INSERT INTO support_messages (id, ticket_id, author_kind, author, body, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .bind(newId(), id, note ? 'note' : 'staff', staffId, message, at),
+      .bind(messageId, id, note ? 'note' : 'staff', staffId, message, at),
+    ...attachmentStatements(db, id, messageId, files.value, at),
   ];
   if (!note) {
     statements.push(
@@ -399,6 +497,29 @@ export async function requesterContact(
 }
 
 /** Cron: a ticket closed longer ago than the retention period is deleted, unless a hold keeps it. */
+/**
+ * The stored file of one attachment, for the app that shows it: a requester only on their own
+ * ticket and never from a staff note; staff (`who` null) on any ticket.
+ */
+export async function attachmentFile(
+  db: D1Database,
+  who: { kind: RequesterKind; ref: string } | null,
+  ticketId: string,
+  attachmentId: string,
+): Promise<Result<{ file_ref: string; name: string; content_type: string }>> {
+  const row = await db
+    .prepare(
+      `SELECT a.file_ref, a.name, a.content_type FROM support_attachments a
+       JOIN support_messages m ON m.id = a.message_id
+       JOIN support_tickets t ON t.id = a.ticket_id
+       WHERE a.id = ? AND a.ticket_id = ?
+         AND (? IS NULL OR (t.requester_kind = ? AND t.requester_ref = ? AND m.author_kind != 'note'))`,
+    )
+    .bind(attachmentId, ticketId, who ? 1 : null, who?.kind ?? null, who?.ref ?? null)
+    .first<{ file_ref: string; name: string; content_type: string }>();
+  return row ? ok(row) : fail('not_found');
+}
+
 export async function purgeSupport(db: D1Database, at: number): Promise<number> {
   const cutoff = at - (await readSettings(db)).support_retention_days * DAY;
   const due = `closed_at IS NOT NULL AND closed_at <= ${String(cutoff)}
@@ -409,7 +530,15 @@ export async function purgeSupport(db: D1Database, at: number): Promise<number> 
     .first<{ n: number }>();
   const n = count?.n ?? 0;
   if (n === 0) return 0;
+  const batch = `(SELECT id FROM support_tickets WHERE status = 'closed' AND ${due} ORDER BY id LIMIT 500)`;
   await db.batch([
+    // Their files go to the queue Merkez empties from storage, then their records go.
+    db.prepare(
+      `INSERT OR IGNORE INTO erased_files (file_ref, bucket, record_id, reason, requested_by, requested_at)
+       SELECT file_ref, 'evidence', ticket_id, 'support_retention', 'system', ${String(at)}
+       FROM support_attachments WHERE ticket_id IN ${batch}`,
+    ),
+    db.prepare(`DELETE FROM support_attachments WHERE ticket_id IN ${batch}`),
     db.prepare(
       `DELETE FROM support_messages WHERE ticket_id IN
          (SELECT id FROM support_tickets WHERE status = 'closed' AND ${due} ORDER BY id LIMIT 500)`,

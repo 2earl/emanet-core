@@ -44,7 +44,9 @@ import { retentionOverview } from './retention';
 import {
   assignTicket,
   closeAsRequester,
+  attachmentFile,
   deleteReply,
+  type AttachmentInput,
   myTicket,
   myTickets,
   openTicket,
@@ -402,7 +404,7 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
   async openTicket(
     orgId: string,
     userId: string,
-    input: { subject: string; category: string; message: string },
+    input: { subject: string; category: string; message: string; attachments?: AttachmentInput[] },
   ) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
@@ -432,7 +434,24 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
     return myTicket(this.env.DB, 'partner', partner.id, ticketId);
   }
 
-  async replyTicket(orgId: string, userId: string, ticketId: string, body: string) {
+  async ticketAttachment(orgId: string, ticketId: string, attachmentId: string) {
+    const partner = await partnerByOrg(this.env.DB, orgId);
+    if (!partner) return fail('not_a_partner');
+    return attachmentFile(
+      this.env.DB,
+      { kind: 'partner', ref: partner.id },
+      ticketId,
+      attachmentId,
+    );
+  }
+
+  async replyTicket(
+    orgId: string,
+    userId: string,
+    ticketId: string,
+    body: string,
+    attachments: AttachmentInput[] = [],
+  ) {
     const partner = await partnerByOrg(this.env.DB, orgId);
     if (!partner) return fail('not_a_partner');
     const result = await replyAsRequester(
@@ -443,6 +462,7 @@ export class PartnerApi extends WorkerEntrypoint<Env> {
       ticketId,
       body,
       now(),
+      attachments,
     );
     if (result.ok) await tellStaffOfTicket(this.env, this.send, ticketId, 'partner', false, '');
     return result;
@@ -782,7 +802,10 @@ export class FieldApi extends WorkerEntrypoint<Env> {
 
   // ---- Support desk (docs/DESIGN.md §20) ----
 
-  async openTicket(agentId: string, input: { subject: string; category: string; message: string }) {
+  async openTicket(
+    agentId: string,
+    input: { subject: string; category: string; message: string; attachments?: AttachmentInput[] },
+  ) {
     const result = await openTicket(this.env.DB, 'agent', agentId, agentId, input, now());
     if (result.ok) {
       await tellStaffOfTicket(this.env, this.send, result.value.id, 'agent', true, input.category);
@@ -798,7 +821,16 @@ export class FieldApi extends WorkerEntrypoint<Env> {
     return myTicket(this.env.DB, 'agent', agentId, ticketId);
   }
 
-  async replyTicket(agentId: string, ticketId: string, body: string) {
+  async ticketAttachment(agentId: string, ticketId: string, attachmentId: string) {
+    return attachmentFile(this.env.DB, { kind: 'agent', ref: agentId }, ticketId, attachmentId);
+  }
+
+  async replyTicket(
+    agentId: string,
+    ticketId: string,
+    body: string,
+    attachments: AttachmentInput[] = [],
+  ) {
     const result = await replyAsRequester(
       this.env.DB,
       'agent',
@@ -807,6 +839,7 @@ export class FieldApi extends WorkerEntrypoint<Env> {
       ticketId,
       body,
       now(),
+      attachments,
     );
     if (result.ok) await tellStaffOfTicket(this.env, this.send, ticketId, 'agent', false, '');
     return result;
@@ -1516,8 +1549,18 @@ export class ControlApi extends WorkerEntrypoint<Env> {
   }
 
   /** Writes to the requester, or, with `note`, only for staff. The mail never carries the text. */
-  async supportReply(staffId: string, ticketId: string, body: string, note = false) {
-    const result = await staffReply(this.env.DB, staffId, ticketId, body, note, now());
+  async supportAttachment(ticketId: string, attachmentId: string) {
+    return attachmentFile(this.env.DB, null, ticketId, attachmentId);
+  }
+
+  async supportReply(
+    staffId: string,
+    ticketId: string,
+    body: string,
+    note = false,
+    attachments: AttachmentInput[] = [],
+  ) {
+    const result = await staffReply(this.env.DB, staffId, ticketId, body, note, now(), attachments);
     if (result.ok && result.value.notify) {
       try {
         const to = await requesterContact(this.env.DB, ticketId);
