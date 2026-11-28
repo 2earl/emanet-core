@@ -196,11 +196,59 @@ export interface Hunt {
   earn_kurus: number;
 }
 
-/** Open hunts for an agent, optionally in one city. Claimed vehicles and cooldowns are left out. */
+/** Vehicles an agent may take: huntable, not claimed by anyone now, not in their cooldown. */
+const OPEN_TO = `${HUNTABLE}
+  AND NOT EXISTS (SELECT 1 FROM claims cl WHERE cl.vehicle_id = v.id AND cl.closed_at IS NULL AND cl.expires_at > ?1)
+  AND NOT EXISTS (SELECT 1 FROM cooldowns cd WHERE cd.vehicle_id = v.id AND cd.agent_id = ?2 AND cd.until > ?1)`;
+
+export interface HuntArea {
+  city: string;
+  district: string;
+  /** Vehicles this agent may take with a place in this district. */
+  vehicles: number;
+}
+
+/**
+ * Where an agent could look right now: each city and district with vehicles open to them, cities
+ * in Turkish alphabetical order, districts with the most vehicles first. Lets the app offer only
+ * places that have something, instead of a city typed by hand that may match nothing.
+ */
+export async function huntAreas(
+  db: D1Database,
+  agentId: string,
+  at: number,
+): Promise<Result<HuntArea[]>> {
+  const agent = await agentOf(db, agentId);
+  if (agent?.status !== 'active') return fail('agent_not_active');
+  const { results } = await db
+    .prepare(
+      `SELECT cp.city, cp.district, count(DISTINCT v.id) AS vehicles
+       FROM vehicles v
+       JOIN cases c ON c.vehicle_id = v.id AND c.status = 'active'
+       JOIN case_places cp ON cp.case_id = c.id
+       WHERE ${OPEN_TO}
+       GROUP BY cp.city, cp.district`,
+    )
+    .bind(at, agentId)
+    .all<HuntArea>();
+  return ok(
+    results.sort(
+      (a, b) =>
+        a.city.localeCompare(b.city, 'tr') ||
+        b.vehicles - a.vehicles ||
+        a.district.localeCompare(b.district, 'tr'),
+    ),
+  );
+}
+
+/**
+ * Open hunts for an agent, optionally in one city and one district of it. Claimed vehicles and
+ * cooldowns are left out.
+ */
 export async function listHunts(
   db: D1Database,
   agentId: string,
-  query: { city?: string; limit?: number },
+  query: { city?: string; district?: string; limit?: number },
   at: number,
 ): Promise<Result<Hunt[]>> {
   const agent = await agentOf(db, agentId);
@@ -217,15 +265,14 @@ export async function listHunts(
             WHERE c.vehicle_id = v.id AND c.status = 'active') AS areas
        FROM vehicles v
        JOIN vehicle_plates p ON p.vehicle_id = v.id AND p.valid_to IS NULL
-       WHERE ${HUNTABLE}
-         AND NOT EXISTS (SELECT 1 FROM claims cl WHERE cl.vehicle_id = v.id AND cl.closed_at IS NULL AND cl.expires_at > ?)
-         AND NOT EXISTS (SELECT 1 FROM cooldowns cd WHERE cd.vehicle_id = v.id AND cd.agent_id = ? AND cd.until > ?)
-         AND (? IS NULL OR EXISTS (
+       WHERE ${OPEN_TO}
+         AND (?3 IS NULL OR EXISTS (
            SELECT 1 FROM case_places cp JOIN cases c ON c.id = cp.case_id
-           WHERE c.vehicle_id = v.id AND c.status = 'active' AND cp.city = ?))
-       ORDER BY fee DESC, v.id LIMIT ?`,
+           WHERE c.vehicle_id = v.id AND c.status = 'active' AND cp.city = ?3
+             AND (?4 IS NULL OR cp.district = ?4)))
+       ORDER BY fee DESC, v.id LIMIT ?5`,
     )
-    .bind(at, agentId, at, query.city ?? null, query.city ?? null, limit)
+    .bind(at, agentId, query.city ?? null, query.city ? (query.district ?? null) : null, limit)
     .all<{
       id: string;
       plate: string;
