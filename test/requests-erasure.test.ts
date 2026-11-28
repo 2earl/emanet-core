@@ -531,3 +531,60 @@ describe('erasure on request and the sealed archive', () => {
     expect(await listArchives(db(), id)).toHaveLength(1);
   });
 });
+
+describe('reminding an agent before the time limit', () => {
+  it('reminds once, only inside the last days, and never an answered or erased agent', async () => {
+    const { remindRequests } = await import('../src/agent-requests');
+    const { id } = await applicant();
+    unwrap(
+      await askAgent(
+        db(),
+        'staff-1',
+        id,
+        [{ kind: 'info', subject: 'address', note: 'Adresinizde daire numarası eksik.' }],
+        14,
+        T0,
+      ),
+    );
+    const sent: { agent: string; items: string[]; days: number }[] = [];
+    const send = (agent: string, items: string[], days: number) => {
+      sent.push({ agent, items, days });
+      return Promise.resolve(true);
+    };
+    // The database is shared with earlier tests, so only this agent's reminders are counted.
+    const mine = () => sent.filter((one) => one.agent === id);
+    // Plenty of time left: nothing yet.
+    await remindRequests(db(), send, T0 + 5 * DAY);
+    expect(mine()).toHaveLength(0);
+    // Three days left: one reminder, with the staff's words.
+    await remindRequests(db(), send, T0 + 11 * DAY);
+    expect(mine()).toEqual([{ agent: id, items: ['Adresinizde daire numarası eksik.'], days: 3 }]);
+    // Never twice, and not once the time is over.
+    await remindRequests(db(), send, T0 + 12 * DAY);
+    await remindRequests(db(), send, T0 + 15 * DAY);
+    expect(mine()).toHaveLength(1);
+  });
+
+  it('skips an agent whose request is answered', async () => {
+    const { remindRequests } = await import('../src/agent-requests');
+    const { id } = await applicant();
+    const asked = unwrap(
+      await askAgent(
+        db(),
+        'staff-1',
+        id,
+        [{ kind: 'info', subject: 'city', note: 'Şehrinizi doğrulayın lütfen.' }],
+        14,
+        T0,
+      ),
+    );
+    unwrap(await answerRequest(db(), id, asked.ids[0] ?? '', 'Düzeltildi', T0 + DAY));
+    const told: string[] = [];
+    const send = (agent: string) => {
+      told.push(agent);
+      return Promise.resolve(true);
+    };
+    await remindRequests(db(), send, T0 + 12 * DAY);
+    expect(told).not.toContain(id);
+  });
+});

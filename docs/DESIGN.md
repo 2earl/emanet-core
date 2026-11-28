@@ -715,6 +715,10 @@ a detail by correcting it. Staff accept the answer, ask again, or withdraw the r
 send an application again with a request open, and nobody is activated with one unsettled. A
 requested document that can't be read or doesn't match is asked for again in the same step.
 
+Three days before a request's time limit the cron (`requestReminders`) emails the agent once, with staff's
+words, listing everything still open; `agent_requests.reminded_at` is set first so a failing mail is never
+repeated. Nothing happens automatically when the time runs out: the request shows as late in Merkez.
+
 **Erasure on request** (`src/erasure.ts`). An agent asks on the "My data" page; the request enters
 the register (§8) with its thirty-day limit and can be withdrawn until decided. An admin carries
 it out or refuses it with the reason the person is told. It waits while a payout is earned but not

@@ -538,6 +538,8 @@ export type AgentNotice =
   | { kind: 'payout_sent' }
   /** Staff ask for details or documents: one line per thing asked, in staff's words. */
   | { kind: 'requested'; items: string[]; days: number }
+  /** A request is nearly out of time. */
+  | { kind: 'request_reminder'; items: string[]; days: number }
   | { kind: 'erasure_received'; days: number }
   | { kind: 'erasure_done'; years: number }
   | { kind: 'erasure_refused'; reason: string };
@@ -715,6 +717,25 @@ export function agentMail(locale: MailLocale, to: string, notice: AgentNotice, s
               'To go on with your account we need the following from you:',
               ...notice.items.map((item) => `• ${item}`),
               `Please answer within ${String(notice.days)} days under “What we need from you” in Emanet Saha. Don’t send documents by email.`,
+            ],
+        action: { label: tr ? 'Yanıtla' : 'Answer', url: `${saha}/requests` },
+      };
+    case 'request_reminder':
+      return {
+        ...base,
+        subject: tr
+          ? 'Emanet Saha: bekleyen isteğimiz için süre azalıyor'
+          : 'Emanet Saha: time is running out on what we asked for',
+        paragraphs: tr
+          ? [
+              'Aşağıdakileri hâlâ bekliyoruz:',
+              ...notice.items.map((item) => `• ${item}`),
+              `Yanıtlamanız için en fazla ${String(notice.days)} gün kaldı. Süre dolarsa başvurunuz ya da hesabınız bu yüzden bekletilebilir.`,
+            ]
+          : [
+              'We are still waiting for the following:',
+              ...notice.items.map((item) => `• ${item}`),
+              `You have ${String(notice.days)} days left to answer. If the time runs out, your application or account may be held for this reason.`,
             ],
         action: { label: tr ? 'Yanıtla' : 'Answer', url: `${saha}/requests` },
       };
