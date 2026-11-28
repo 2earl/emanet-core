@@ -44,6 +44,8 @@ export interface AgentProfile {
   address: string | null;
   /** The person's data was erased: nothing can be done with this account. */
   erased: boolean;
+  /** Things staff asked for that the agent hasn't answered yet. */
+  requests_open: number;
 }
 
 export async function agentProfile(db: D1Database, agentId: string): Promise<Result<AgentProfile>> {
@@ -52,6 +54,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
       `SELECT status, legal_name, city, phone, iban, iban_verified_at, tax_profile, vkn,
          terms_version, submitted_at, strikes, email, email_verified_at, tckn_hash, birth_year,
          review_note, address, erased_at,
+         (SELECT count(*) FROM agent_requests r WHERE r.agent_id = a.user_id AND r.status = 'open') AS requests_open,
          (SELECT count(*) FROM claims WHERE agent_id = a.user_id AND closed_at IS NULL) AS open_claims
        FROM agents a WHERE user_id = ?`,
     )
@@ -76,6 +79,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
       review_note: string | null;
       address: string | null;
       erased_at: number | null;
+      requests_open: number;
     }>();
   if (!row) return fail('not_found');
   return ok({
@@ -98,6 +102,7 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     address: row.address,
     open_claims: row.open_claims,
     erased: row.erased_at !== null,
+    requests_open: row.requests_open,
   });
 }
 
