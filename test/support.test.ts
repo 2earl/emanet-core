@@ -4,7 +4,7 @@ import { updateProfile } from '../src/agents';
 import { registerAgent } from '../src/claims';
 import type { ControlApi, FieldApi, PartnerApi } from '../src/index';
 import { retentionOverview } from '../src/retention';
-import { OPEN_LIMIT, purgeSupport } from '../src/support';
+import { ATTACHMENT_LIMIT, OPEN_LIMIT, purgeSupport } from '../src/support';
 import { activePartner, db, randomMobile, randomTckn, T0, unwrap, verifiedEmail } from './helpers';
 
 const DAY = 86_400;
@@ -151,6 +151,105 @@ describe('the support desk', () => {
     expect(await purgeSupport(db(), at)).toBe(due);
     expect(await field().myTicket(free, a)).toMatchObject({ ok: false });
     expect(unwrap(await field().myTicket(held, b)).ticket.id).toBe(b);
+  });
+});
+
+const file = (name = 'makbuz.jpg', content_type = 'image/jpeg') => ({
+  file_ref: `support/${crypto.randomUUID()}`,
+  name,
+  content_type,
+  size: 120_000,
+  sha256: 'a'.repeat(64),
+});
+
+describe('attachments on support messages', () => {
+  it('records files with a message and shows each to whom it belongs', async () => {
+    const id = await agent();
+    const other = await agent();
+    const photo = file('C:\\Users\\ayse\\makbuz <1>.jpg');
+    const { id: ticketId } = unwrap(
+      await field().openTicket(id, { ...ticket, attachments: [photo] }),
+    );
+    const note = file('ic-not.pdf', 'application/pdf');
+    unwrap(await control().supportReply('staff-1', ticketId, 'İç not, dosyalı.', true, [note]));
+    const answer = file('ekran.png', 'image/png');
+    unwrap(
+      await control().supportReply('staff-1', ticketId, 'Ekteki adımları izleyin.', false, [
+        answer,
+      ]),
+    );
+
+    const staffView = unwrap(await control().supportTicket(ticketId));
+    expect(staffView.messages.map((m) => m.attachments.length)).toEqual([1, 1, 1]);
+    const [first] = staffView.messages[0]?.attachments ?? [];
+    expect(first?.name).toBe('makbuz 1.jpg');
+
+    const mine = unwrap(await field().myTicket(id, ticketId));
+    expect(mine.messages.flatMap((m) => m.attachments.map((a) => a.name))).toEqual([
+      'makbuz 1.jpg',
+      'ekran.png',
+    ]);
+    const noteId = staffView.messages[1]?.attachments[0]?.id ?? '';
+    const answerId = staffView.messages[2]?.attachments[0]?.id ?? '';
+    expect(unwrap(await field().ticketAttachment(id, ticketId, answerId)).file_ref).toBe(
+      answer.file_ref,
+    );
+    expect(await field().ticketAttachment(id, ticketId, noteId)).toMatchObject({ ok: false });
+    expect(await field().ticketAttachment(other, ticketId, answerId)).toMatchObject({ ok: false });
+    expect(unwrap(await control().supportAttachment(ticketId, noteId)).content_type).toBe(
+      'application/pdf',
+    );
+  });
+
+  it('refuses files that are too many, too large, of the wrong kind or not under support/', async () => {
+    const id = await agent();
+    const many = Array.from({ length: ATTACHMENT_LIMIT + 1 }, () => file());
+    expect(await field().openTicket(id, { ...ticket, attachments: many })).toMatchObject({
+      error: 'too_many_files',
+    });
+    expect(
+      await field().openTicket(id, {
+        ...ticket,
+        attachments: [{ ...file(), size: 11 * 1024 * 1024 }],
+      }),
+    ).toMatchObject({ error: 'file_too_large' });
+    expect(
+      await field().openTicket(id, {
+        ...ticket,
+        attachments: [file('x.exe', 'application/x-msdownload')],
+      }),
+    ).toMatchObject({ error: 'file_type' });
+    expect(
+      await field().openTicket(id, {
+        ...ticket,
+        attachments: [{ ...file(), file_ref: 'evidence/abc' }],
+      }),
+    ).toMatchObject({ error: 'invalid_file' });
+  });
+
+  it('queues a closed ticket’s files for deletion when the ticket is purged', async () => {
+    const id = await agent();
+    const photo = file();
+    const { id: ticketId } = unwrap(
+      await field().openTicket(id, { ...ticket, attachments: [photo] }),
+    );
+    unwrap(await field().closeTicket(id, ticketId));
+    await purgeSupport(db(), Math.floor(Date.now() / 1000) + 800 * DAY);
+    const queued = await db()
+      .prepare('SELECT bucket, record_id, reason FROM erased_files WHERE file_ref = ?')
+      .bind(photo.file_ref)
+      .first();
+    expect(queued).toEqual({
+      bucket: 'evidence',
+      record_id: ticketId,
+      reason: 'support_retention',
+    });
+    expect(
+      await db()
+        .prepare('SELECT 1 FROM support_attachments WHERE file_ref = ?')
+        .bind(photo.file_ref)
+        .first(),
+    ).toBeNull();
   });
 });
 

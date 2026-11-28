@@ -141,7 +141,9 @@ export async function isHeld(db: D1Database, kind: HoldKind, ref: string): Promi
 export const FILE_HELD = `EXISTS (SELECT 1 FROM legal_holds h WHERE h.released_at IS NULL AND (
   (h.subject_kind = 'agent' AND (
      f.file_ref IN (SELECT e.file_ref FROM evidence e JOIN claims c ON c.id = e.claim_id WHERE c.agent_id = h.subject_ref)
-     OR f.file_ref IN (SELECT a.file_ref FROM agent_documents a WHERE a.agent_id = h.subject_ref)))
+     OR f.file_ref IN (SELECT a.file_ref FROM agent_documents a WHERE a.agent_id = h.subject_ref)
+     OR f.file_ref IN (SELECT s.file_ref FROM support_attachments s JOIN support_tickets t ON t.id = s.ticket_id
+                       WHERE t.requester_kind = 'agent' AND t.requester_ref = h.subject_ref)))
   OR (h.subject_kind = 'onboarding' AND
      f.file_ref IN (SELECT d.file_ref FROM onboarding_documents d WHERE d.onboarding_id = h.subject_ref))
   OR (h.subject_kind = 'case' AND

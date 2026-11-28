@@ -822,4 +822,6 @@ It holds what people write, so `support_retention_days` (default 730) after a ti
 (`supportRetention`) deletes it with its messages, unless the requester is an agent under a legal hold. The retention
 overview lists it.
 
+**Attachments.** A message may carry up to three files: a photo (JPEG, PNG, WebP, HEIC) or a PDF, each at most 10 MB. The app stores the file in the evidence bucket under `support/<uuid>` and core records it in `support_attachments` (migration 0016). A requester sees the files on their own ticket but never those on a staff note; staff see all. When a closed ticket is purged its files go to `erased_files`, which Merkez empties from storage; a legal hold on an agent keeps their files as it keeps their tickets.
+
 **Saved replies.** Answers staff give often are kept in `support_replies` (title in English and Turkish, who they are offered for: everyone, agents or companies, the text, an order). Staff add, change and delete them in Merkez → Support → Saved replies; each change is audited. They hold no personal data, so they have no retention period. At most 30. The first seven ship with migration 0015.
