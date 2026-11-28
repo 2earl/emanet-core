@@ -36,6 +36,7 @@ describe('retention overview', () => {
       'case_places',
       'archive',
       'support',
+      'invitation_requests',
     ]);
     expect(row(before, 'case_places')?.held).toBeGreaterThanOrEqual(1);
     expect(row(before, 'case_places')?.days).toBe(30);
@@ -49,7 +50,11 @@ describe('retention overview', () => {
     expect(row(after, 'case_places')?.held).toBe(row(before, 'case_places')?.held);
 
     const others = before.rows.filter(
-      (r) => r.key !== 'case_places' && r.key !== 'archive' && r.key !== 'support',
+      (r) =>
+        r.key !== 'case_places' &&
+        r.key !== 'archive' &&
+        r.key !== 'support' &&
+        r.key !== 'invitation_requests',
     );
     const queued = others.reduce((sum, r) => sum + r.due, 0);
     expect(await scheduleRetention(db(), at)).toBe(queued);
@@ -58,7 +63,7 @@ describe('retention overview', () => {
 
   it('is served to staff', async () => {
     const overview = unwrap(await control().retentionOverview());
-    expect(overview.rows).toHaveLength(8);
+    expect(overview.rows).toHaveLength(9);
     expect(overview.files_waiting).toBeGreaterThanOrEqual(0);
   });
 });

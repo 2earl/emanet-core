@@ -918,3 +918,97 @@ export function supportStaffMail(
     action: { label: 'Destek kutusunu aç', url },
   };
 }
+
+const KIND_TR: Record<string, string> = {
+  bank: 'Banka',
+  vys: 'Varlık yönetim şirketi',
+  law_firm: 'Hukuk bürosu',
+  leasing: 'Finansal kiralama',
+  other: 'Diğer',
+};
+
+/** For 2earl's team: a company asked to be invited. Which company and where to decide; the person's details stay in Merkez. */
+export function invitationRequestStaffMail(
+  to: string,
+  company: string,
+  kind: string,
+  url: string,
+): Mail {
+  return {
+    to,
+    locale: 'tr',
+    product: 'Merkez',
+    subject: `Emanet: ${company} davet istiyor`,
+    paragraphs: [
+      'Bir kurum Emanet’e davet edilmek istiyor. Başvuranın bilgileri ve mesajı Merkez’de, Katılım → Davet istekleri altında.',
+    ],
+    rows: [{ label: `Kurum: ${company}` }, { label: `Tür: ${KIND_TR[kind] ?? kind}` }],
+    action: { label: 'İsteği aç', url },
+  };
+}
+
+/** To the person who asked: we have it, and what happens next. */
+export function invitationRequestReceiptMail(
+  locale: MailLocale,
+  to: string,
+  contactName: string,
+  company: string,
+): Mail {
+  return locale === 'tr'
+    ? {
+        to,
+        locale: 'tr',
+        product: 'Kurumsal',
+        subject: 'Emanet: davet isteğinizi aldık',
+        paragraphs: [
+          `Sayın ${contactName},`,
+          `${company} için Emanet davet isteğinizi aldık. 2earl ekibi isteğinizi inceleyip size bu adresten yazacak; gerekirse sizi arayacağız.`,
+          'Davet gönderdiğimizde, bağlantıyla kurum bilgilerinizi girer ve sözleşmeyi inceleyip onaylarsınız.',
+        ],
+        after: ['Bu isteği siz göndermediyseniz bu e-postayı yanıtlayarak bize bildirin.'],
+      }
+    : {
+        to,
+        locale: 'en',
+        product: 'Kurumsal',
+        subject: 'Emanet: we received your request for an invitation',
+        paragraphs: [
+          `Dear ${contactName},`,
+          `We received your request to invite ${company} to Emanet. The 2earl team will review it and write to you at this address; we may call you if we need more.`,
+          'When we send the invitation, you use its link to enter your company’s details and review and accept the agreement.',
+        ],
+        after: ['If you didn’t send this request, reply to this email to tell us.'],
+      };
+}
+
+/** To the person who asked: not now. No reason given here; staff may write separately. */
+export function invitationRequestDeclinedMail(
+  locale: MailLocale,
+  to: string,
+  contactName: string,
+  company: string,
+): Mail {
+  return locale === 'tr'
+    ? {
+        to,
+        locale: 'tr',
+        product: 'Kurumsal',
+        subject: 'Emanet: davet isteğiniz hakkında',
+        paragraphs: [
+          `Sayın ${contactName},`,
+          `${company} için davet isteğiniz için teşekkür ederiz. Şu an Emanet’i ${company} kurumuna sunamıyoruz.`,
+          'Durumunuz değişirse yeniden istekte bulunabilir ya da bu e-postayı yanıtlayarak bize yazabilirsiniz.',
+        ],
+      }
+    : {
+        to,
+        locale: 'en',
+        product: 'Kurumsal',
+        subject: 'Emanet: about your request for an invitation',
+        paragraphs: [
+          `Dear ${contactName},`,
+          `Thank you for asking us to invite ${company}. We can’t offer Emanet to ${company} at the moment.`,
+          'If things change, you can ask again, or reply to this email to write to us.',
+        ],
+      };
+}

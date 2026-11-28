@@ -547,8 +547,13 @@ the page: thirty days for a data subject's request (KVKK 13), seven days for an 
 | Agents | `agent_sla_hours`, `strike_limit`, `email_code_minutes`, `agent_mail` |
 | Partners | `invitation_days`, `onboarding_sla_hours`, `expiry_warning_days`, `webhook_disable_after`, `max_webhooks` |
 | Money | `kdv_bp`, `invoice_days`, `dual_approval_kurus`, three withholding rates |
-| Privacy | `evidence_retention_days`, `failed_claim_evidence_days`, `place_retention_days`, `abandoned_onboarding_days`, `privacy_request_days` |
+| Privacy | `evidence_retention_days`, `failed_claim_evidence_days`, `place_retention_days`, `abandoned_onboarding_days`, `privacy_request_days`, `support_retention_days`, `invitation_request_days` |
 | Operations | `alert_interval_minutes`, `ops_keep_days` |
+
+**Where emails go** (`src/mail-routes.ts`, table `mail_routes`, migration 0018). Mail to a 2earl team, not to one
+person, goes to a configured address. Each route has a default in code; Merkez Settings shows it and an admin can set
+another address (checked as an address, recorded in the audit log as `settings.mail_route`). Today there is one route:
+`invitation_requests`, default `kurumsal-ekip@emanet.dev`.
 
 ### 7.y Procedures (2026-11-28)
 
@@ -842,3 +847,23 @@ overview lists it.
 **Did it help?** Once staff have answered a ticket, its requester can mark whether the answer helped (`rateTicket`, migration 0017: `rating` helped / not_helped and `rated_at` on the ticket). One mark per ticket; a new mark replaces it; audited (`support.rated`). Staff see the mark on the ticket and, in the answer times, how many answers were marked and how many helped. It goes with the ticket when the ticket is purged or the agent erased.
 
 **Saved replies.** Answers staff give often are kept in `support_replies` (title in English and Turkish, who they are offered for: everyone, agents or companies, the text, an order). Staff add, change and delete them in Merkez → Support → Saved replies; each change is audited. They hold no personal data, so they have no retention period. At most 30. The first seven ship with migration 0015.
+
+## 21. Asking for an invitation (2026-11-28)
+
+Only staff invite a company (§5), so a person who signs in to Kurumsal without one used to reach a dead end. Now they
+can ask (`src/invitation-requests.ts`, migration 0018). Kurumsal shows the form to a signed-in account with no
+organization and no open onboarding: company, kind (bank, VYS, law firm, leasing, other), contact name and address
+(the signed-in address by default), phone and job title (optional), rough volume (up to 100, 100–1,000, over 1,000
+cases a year) and a message. The request is tied to the login account.
+
+- The team address (route `invitation_requests`) gets one email naming the company and kind with a link to the request
+  in Merkez; it carries no contact details. The person gets a receipt.
+- One open request per account; at most three in 30 days.
+- Merkez lists requests under Onboarding (new first) and shows one with its details. **Invite** opens the invitation
+  form filled from the request; when the invitation is sent the request becomes `invited` and points at the onboarding.
+  **Decline** keeps an internal note and, unless staff untick it, emails the person that 2earl can't go ahead now,
+  with no reason.
+- Kurumsal shows the person the state of their latest request (never the staff note).
+- A handled request is deleted `invitation_request_days` (default 365) after it was handled (cron
+  `invitationRequests`); an open one stays until handled. Deleting the login account deletes its requests; the
+  account's export includes them. The retention overview lists them.
