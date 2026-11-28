@@ -806,3 +806,35 @@ export function opsAlertMail(to: string, lines: string[], url: string): Mail {
     action: { label: 'Sistem sayfasını aç', url },
   };
 }
+
+/**
+ * To 2earl's staff: someone opened a sealed archive record or file. Who, when and which one; never
+ * the reason, and never anything from the record.
+ */
+export function archiveOpenedMail(
+  to: string,
+  what: { kind: 'record' | 'file'; staffId: string; archiveId: string; at: number },
+  url: string,
+): Mail {
+  const when = new Intl.DateTimeFormat('tr-TR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Europe/Istanbul',
+  }).format(new Date(what.at * 1000));
+  return {
+    to,
+    locale: 'tr',
+    product: 'Merkez',
+    subject: 'Emanet: mühürlü arşivden bir kayıt açıldı',
+    paragraphs: [
+      'Mühürlü arşivden bir kayıt açıldı. Bunu siz ya da bir yönetici yaptıysa bir işlem gerekmez; tanımadığınız bir açılışsa Merkez’de Gizlilik → Mühürlü arşiv altındaki kayda bakın ve hesabı kontrol edin.',
+    ],
+    rows: [
+      { label: `Ne: ${what.kind === 'file' ? 'belge dosyası' : 'kayıt'}` },
+      { label: `Kim (personel kimliği): ${what.staffId}` },
+      { label: `Ne zaman: ${when} (İstanbul)` },
+      { label: `Arşiv kaydı: ${what.archiveId}` },
+    ],
+    action: { label: 'Mühürlü arşivi aç', url },
+  };
+}
