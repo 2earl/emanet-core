@@ -422,3 +422,114 @@ export async function purgeSupport(db: D1Database, at: number): Promise<number> 
   ]);
   return n;
 }
+
+// ---- Saved replies ---------------------------------------------------------------------------
+
+export type ReplyAudience = 'all' | 'agent' | 'partner';
+
+export interface SavedReply {
+  id: string;
+  title_en: string;
+  title_tr: string;
+  audience: ReplyAudience;
+  body: string;
+  position: number;
+  updated_by: string;
+  updated_at: number;
+}
+
+/** At most this many saved replies: a row of choices, not a library. */
+export const REPLY_LIMIT = 30;
+
+export async function savedReplies(db: D1Database): Promise<SavedReply[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, title_en, title_tr, audience, body, position, updated_by, updated_at
+       FROM support_replies ORDER BY position, title_en`,
+    )
+    .all<SavedReply>();
+  return results;
+}
+
+/** Creates a saved reply (no id) or changes one. Each save is in the audit log. */
+export async function saveReply(
+  db: D1Database,
+  staffId: string,
+  input: {
+    id?: string;
+    title_en: string;
+    title_tr: string;
+    audience: string;
+    body: string;
+    position?: number;
+  },
+  at: number,
+): Promise<Result<{ id: string }>> {
+  const titleEn = text(input.title_en, 2, 60);
+  const titleTr = text(input.title_tr, 2, 60);
+  const body = text(input.body, 10, 4000);
+  if (!titleEn || !titleTr) return fail('invalid_title');
+  if (!body) return fail('invalid_message');
+  if (!['all', 'agent', 'partner'].includes(input.audience)) return fail('invalid_audience');
+  const position =
+    typeof input.position === 'number' && Number.isInteger(input.position)
+      ? Math.min(Math.max(input.position, 0), 9999)
+      : null;
+  if (input.id) {
+    const result = await db
+      .prepare(
+        `UPDATE support_replies SET title_en = ?, title_tr = ?, audience = ?, body = ?,
+           position = COALESCE(?, position), updated_by = ?, updated_at = ? WHERE id = ?`,
+      )
+      .bind(titleEn, titleTr, input.audience, body, position, staffId, at, input.id)
+      .run();
+    if (result.meta.changes === 0) return fail('not_found');
+    await auditStatement(
+      db,
+      at,
+      `staff:${staffId}`,
+      'support.reply_saved',
+      `reply:${input.id}`,
+    ).run();
+    return ok({ id: input.id });
+  }
+  const count = await db
+    .prepare('SELECT count(*) AS n, max(position) AS last FROM support_replies')
+    .first<{
+      n: number;
+      last: number | null;
+    }>();
+  if ((count?.n ?? 0) >= REPLY_LIMIT) return fail('too_many_replies');
+  const id = newId();
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO support_replies (id, title_en, title_tr, audience, body, position, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        id,
+        titleEn,
+        titleTr,
+        input.audience,
+        body,
+        position ?? (count?.last ?? 0) + 10,
+        staffId,
+        at,
+      ),
+    auditStatement(db, at, `staff:${staffId}`, 'support.reply_saved', `reply:${id}`),
+  ]);
+  return ok({ id });
+}
+
+export async function deleteReply(
+  db: D1Database,
+  staffId: string,
+  id: string,
+  at: number,
+): Promise<Result<null>> {
+  const result = await db.prepare('DELETE FROM support_replies WHERE id = ?').bind(id).run();
+  if (result.meta.changes === 0) return fail('not_found');
+  await auditStatement(db, at, `staff:${staffId}`, 'support.reply_deleted', `reply:${id}`).run();
+  return ok(null);
+}

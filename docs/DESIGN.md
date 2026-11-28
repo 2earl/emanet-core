@@ -821,3 +821,5 @@ text. Staff can assign, note, answer and close. No attachments yet.
 It holds what people write, so `support_retention_days` (default 730) after a ticket closes the cron
 (`supportRetention`) deletes it with its messages, unless the requester is an agent under a legal hold. The retention
 overview lists it.
+
+**Saved replies.** Answers staff give often are kept in `support_replies` (title in English and Turkish, who they are offered for: everyone, agents or companies, the text, an order). Staff add, change and delete them in Merkez → Support → Saved replies; each change is audited. They hold no personal data, so they have no retention period. At most 30. The first seven ship with migration 0015.
