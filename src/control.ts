@@ -84,7 +84,9 @@ export async function listAgents(db: D1Database, status: string | null): Promise
          a.strikes, a.created_at, a.submitted_at, a.terms_version, a.birth_year, a.review_note, a.address,
          CASE WHEN a.email_verified_at IS NOT NULL THEN a.email END AS email,
          a.tckn_hash IS NOT NULL AS id_given,
-         a.iban_verified_at IS NOT NULL AS iban_verified,
+         a.iban_verified_at IS NOT NULL AS iban_verified, a.erased_at,
+         (SELECT count(*) FROM agent_requests r WHERE r.agent_id = a.user_id AND r.status = 'open') AS requests_open,
+         (SELECT count(*) FROM agent_requests r WHERE r.agent_id = a.user_id AND r.status = 'answered') AS requests_answered,
          (SELECT count(*) FROM claims c WHERE c.agent_id = a.user_id AND c.closed_at IS NULL) AS open_claims,
          (SELECT count(*) FROM claims c WHERE c.agent_id = a.user_id AND c.close_reason = 'delivered') AS deliveries
        FROM agents a WHERE (? IS NULL OR a.status = ?) ORDER BY a.created_at DESC LIMIT 500`,
