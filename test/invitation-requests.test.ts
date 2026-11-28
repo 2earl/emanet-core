@@ -6,6 +6,7 @@ import {
   declineInvitationRequest,
   invitationRequest,
   myInvitationRequest,
+  nameKey,
   purgeInvitationRequests,
   requestInvitation,
 } from '../src/invitation-requests';
@@ -160,5 +161,40 @@ describe('invitation requests', () => {
     const open = unwrap(await requestInvitation(db(), box.send, 'https://m', other, input(), T0));
     await deleteUser(db(), other, T0 + 1);
     expect(await invitationRequest(db(), open.id)).toMatchObject({ error: 'not_found' });
+  });
+
+  it('keeps a name on one line, and shows staff what a request may duplicate', async () => {
+    const box = mailbox();
+    const user = crypto.randomUUID();
+    const { id } = unwrap(
+      await requestInvitation(
+        db(),
+        box.send,
+        'https://m',
+        user,
+        input({
+          company: 'Örnek\r\nBcc: x@evil.example Bank A.Ş.',
+          contactEmail: `z-${user.slice(0, 6)}@ornek.example`,
+        }),
+        T0,
+      ),
+    );
+    const saved = unwrap(await invitationRequest(db(), id));
+    expect(saved.company).not.toMatch(/[\r\n]/);
+    expect(box.sent.every((m) => !/[\r\n]/.test(m.subject))).toBe(true);
+    expect(nameKey('ÖRNEK Bank A.Ş.')).toBe(nameKey('Örnek Bank'));
+    const partnerOrg = `org_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    await db()
+      .prepare(
+        `INSERT INTO partners (id, org_id, kind, legal_name, vkn, status, created_by, created_at, updated_at)
+         VALUES (?, ?, 'bank', 'ÖRNEK BCC X EVIL EXAMPLE BANK A.Ş.', '5555555555', 'active', 'staff-1', ?, ?)`,
+      )
+      .bind(crypto.randomUUID(), partnerOrg, T0, T0)
+      .run();
+    const full = unwrap(await control().invitationRequest(id));
+    expect(full.matches.earlier).toBe(0);
+    expect(full.matches.partners.map((p) => p.legal_name)).toContain(
+      'ÖRNEK BCC X EVIL EXAMPLE BANK A.Ş.',
+    );
   });
 });

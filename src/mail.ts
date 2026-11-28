@@ -133,7 +133,9 @@ export function mailer(env: Env): Send {
         to: mail.to,
         from: SENDER,
         replyTo: REPLY_TO,
-        subject: mail.subject,
+        // A subject is one line whatever went into it (a company's name, say).
+        // eslint-disable-next-line no-control-regex
+        subject: mail.subject.replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 200),
         text: text(mail),
         html: html(mail),
       });
