@@ -18,6 +18,7 @@
  */
 import { auditStatement } from './audit';
 import { orphanReviewsStatement } from './claims';
+import { isHeld } from './holds';
 import { keyedHash, open, openBytes, seal, sealBytes } from './pii';
 import { eraseAgentEvidenceStatement } from './privacy';
 import { fail, newId, ok, type Result } from './result';
@@ -185,6 +186,12 @@ export async function eraseAgent(
     return by === 'system'
       ? ok({ archive_id: null, email: null, locale: 'tr', years })
       : fail('already_erased');
+  }
+  if (await isHeld(db, 'agent', agentId)) {
+    // A legal hold wins over a request to erase. The request stays; staff answer it citing the hold.
+    if (by !== 'system') return fail('legal_hold');
+    await auditStatement(db, at, 'system', 'privacy.erasure_held', `agent:${agentId}`).run();
+    return ok({ archive_id: null, email: null, locale: 'tr', years });
   }
   const blockers = await erasureBlockers(db, agentId);
   if (by !== 'system' && blockers.payouts_pending > 0) return fail('payouts_pending');
@@ -609,7 +616,10 @@ export async function archiveHasFile(
 export async function purgeArchives(db: D1Database, at: number): Promise<number> {
   const { results } = await db
     .prepare(
-      'SELECT id, files FROM erasure_archive WHERE purged_at IS NULL AND purge_at <= ? LIMIT 50',
+      `SELECT id, files FROM erasure_archive a WHERE purged_at IS NULL AND purge_at <= ?
+         AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.released_at IS NULL
+                           AND h.subject_kind = 'agent' AND h.subject_ref = a.subject_ref)
+       LIMIT 50`,
     )
     .bind(at)
     .all<{ id: string; files: string }>();

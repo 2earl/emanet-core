@@ -39,6 +39,7 @@ import {
   sealArchiveFile,
   withdrawErasure,
 } from './erasure';
+import { listHolds, placeHold, releaseHold } from './holds';
 import {
   agentProfile,
   earnings,
@@ -1361,6 +1362,19 @@ export class ControlApi extends WorkerEntrypoint<Env> {
       }
     }
     return result.ok ? ok({ archive_id: result.value.archive_id }) : result;
+  }
+
+  /** Stops automatic deletion for one agent, case or onboarding while a dispute is open. */
+  async placeHold(staffId: string, kind: string, ref: string, reason: string) {
+    return placeHold(this.env.DB, staffId, kind, ref, reason, now());
+  }
+
+  async releaseHold(staffId: string, holdId: string, reason: string) {
+    return releaseHold(this.env.DB, staffId, holdId, reason, now());
+  }
+
+  async holds() {
+    return ok(await listHolds(this.env.DB));
   }
 
   async refuseErasure(staffId: string, requestId: string, reason: string) {

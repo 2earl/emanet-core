@@ -20,6 +20,7 @@
  * 90 days.
  */
 import { auditStatement } from './audit';
+import { CLAIM_HELD, FILE_HELD } from './holds';
 import { normalizePlate, normalizeVin } from './normalize';
 import { fail, newId, ok, type Result } from './result';
 import { readSettings } from './settings';
@@ -75,8 +76,9 @@ export interface DueFile {
 export async function filesDue(db: D1Database, limit = 100): Promise<DueFile[]> {
   const { results } = await db
     .prepare(
-      `SELECT file_ref, bucket, archive_id FROM erased_files
-       WHERE erased_at IS NULL AND archive_id IS NULL ORDER BY requested_at LIMIT ?`,
+      `SELECT file_ref, bucket, archive_id FROM erased_files f
+       WHERE erased_at IS NULL AND archive_id IS NULL AND NOT ${FILE_HELD}
+       ORDER BY requested_at LIMIT ?`,
     )
     .bind(Math.min(Math.max(limit, 1), 500))
     .all<DueFile>();
@@ -135,6 +137,7 @@ export async function scheduleRetention(db: D1Database, at: number): Promise<num
            AND ((c.close_reason != 'delivered' AND c.closed_at <= ?)
              OR (c.close_reason = 'delivered' AND c.closed_at <= ?))
            AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = e.file_ref)
+           AND NOT ${CLAIM_HELD}
          LIMIT 500`,
       )
       .bind(at, at - settings.failed_claim_evidence_days * DAY, at - kept),
@@ -146,6 +149,8 @@ export async function scheduleRetention(db: D1Database, at: number): Promise<num
          WHERE ((o.status IN ('rejected', 'cancelled', 'expired') AND o.updated_at <= ?)
              OR (o.status = 'approved' AND o.updated_at <= ?))
            AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = d.file_ref)
+           AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.released_at IS NULL
+                             AND h.subject_kind = 'onboarding' AND h.subject_ref = o.id)
          LIMIT 500`,
       )
       .bind(at, at - settings.abandoned_onboarding_days * DAY, at - kept),
@@ -157,6 +162,8 @@ export async function scheduleRetention(db: D1Database, at: number): Promise<num
          FROM agent_documents d
          WHERE d.status = 'uploaded' AND d.uploaded_at <= ?
            AND NOT EXISTS (SELECT 1 FROM erased_files x WHERE x.file_ref = d.file_ref)
+           AND NOT EXISTS (SELECT 1 FROM legal_holds h WHERE h.released_at IS NULL
+                             AND h.subject_kind = 'agent' AND h.subject_ref = d.agent_id)
          LIMIT 500`,
       )
       .bind(at, at - settings.abandoned_onboarding_days * DAY),
