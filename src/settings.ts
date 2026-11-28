@@ -52,6 +52,8 @@ export const SETTINGS = {
   strike_limit: spec('agents', 'count', 3, 0, 20),
   /** How long an emailed verification code works. */
   email_code_minutes: spec('agents', 'minutes', 15, 5, 120),
+  /** Days an agent is given to answer when staff ask for a detail or a document. */
+  agent_request_days: spec('agents', 'days', 14, 1, 90),
   /** Whether agents are emailed about decisions on their application, deliveries and payouts. */
   agent_mail: spec('agents', 'switch', 1, 0, 1),
   /** Whether an application needs the two e-Devlet documents, and activation needs them verified. */
@@ -90,6 +92,8 @@ export const SETTINGS = {
   place_retention_days: spec('privacy', 'days', 30, 1, 365),
   /** How long the documents of an onboarding that wasn't completed are kept. */
   abandoned_onboarding_days: spec('privacy', 'days', 90, 7, 365),
+  /** How long the sealed copy of erased personal data is kept before it is destroyed. */
+  erasure_archive_days: spec('privacy', 'days', 3650, 180, 3650),
   /** Days to answer a data subject's request (KVKK 13: thirty at most). */
   privacy_request_days: spec('privacy', 'days', 30, 1, 30),
 

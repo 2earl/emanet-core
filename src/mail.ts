@@ -535,7 +535,12 @@ export type AgentNotice =
   | { kind: 'reinstated' }
   | { kind: 'delivery_accepted'; plate: string | null }
   | { kind: 'delivery_refused'; plate: string | null; reason: string; strikes: number | null }
-  | { kind: 'payout_sent' };
+  | { kind: 'payout_sent' }
+  /** Staff ask for details or documents: one line per thing asked, in staff's words. */
+  | { kind: 'requested'; items: string[]; days: number }
+  | { kind: 'erasure_received'; days: number }
+  | { kind: 'erasure_done'; years: number }
+  | { kind: 'erasure_refused'; reason: string };
 
 const AGENT_WHY = {
   tr: 'Bu e-postayı Emanet Saha hesabınızla ilgili bir karar verildiği için alıyorsunuz. Sorularınız için bu e-postayı yanıtlayın.',
@@ -693,6 +698,75 @@ export function agentMail(locale: MailLocale, to: string, notice: AgentNotice, s
               'A payment was sent to your registered IBAN. Depending on your bank it can take a working day to arrive.',
             ],
         action: { label: tr ? 'Kazançlarım' : 'My earnings', url: `${saha}/earnings` },
+      };
+    case 'requested':
+      return {
+        ...base,
+        subject: tr
+          ? 'Emanet Saha: sizden bilgi veya belge bekliyoruz'
+          : 'Emanet Saha: we need something from you',
+        paragraphs: tr
+          ? [
+              'Hesabınızla ilgili işleme devam edebilmemiz için aşağıdakilere ihtiyacımız var:',
+              ...notice.items.map((item) => `• ${item}`),
+              `Lütfen ${String(notice.days)} gün içinde Emanet Saha’da “Sizden beklenenler” bölümünden yanıtlayın. Belgeleri e-postayla göndermeyin.`,
+            ]
+          : [
+              'To go on with your account we need the following from you:',
+              ...notice.items.map((item) => `• ${item}`),
+              `Please answer within ${String(notice.days)} days under “What we need from you” in Emanet Saha. Don’t send documents by email.`,
+            ],
+        action: { label: tr ? 'Yanıtla' : 'Answer', url: `${saha}/requests` },
+      };
+    case 'erasure_received':
+      return {
+        ...base,
+        subject: tr ? 'Veri silme talebiniz alındı' : 'We have your request to erase your data',
+        paragraphs: tr
+          ? [
+              'Kişisel verilerinizin silinmesi talebiniz bize ulaştı.',
+              `Talebinizi en geç ${String(notice.days)} gün içinde sonuçlandırıp size bildireceğiz. Karar verilene kadar talebinizi Emanet Saha’dan geri alabilirsiniz.`,
+            ]
+          : [
+              'Your request to have your personal data erased has reached us.',
+              `We will decide and tell you within ${String(notice.days)} days at the latest. Until then you can withdraw the request in Emanet Saha.`,
+            ],
+        action: { label: tr ? 'Talebimi gör' : 'See my request', url: `${saha}/privacy` },
+      };
+    case 'erasure_done':
+      return {
+        ...base,
+        subject: tr ? 'Kişisel verileriniz silindi' : 'Your personal data was erased',
+        paragraphs: tr
+          ? [
+              'Talebiniz üzerine Emanet Saha hesabınızdaki kişisel verileriniz silindi ve hesabınız kapatıldı.',
+              'Mevzuat gereği saklanması zorunlu olan ödeme ve muhasebe kayıtları süresi dolana kadar tutulur.',
+              `Silinen verilerin şifreli bir kopyası, yalnızca hukuki yükümlülükler ve olası uyuşmazlıklar için, erişimi kısıtlı ve kayıt altında olacak biçimde en çok ${String(notice.years)} yıl saklanır; süre sonunda yok edilir. Bu e-posta, bu adrese göndereceğimiz son e-postadır.`,
+            ]
+          : [
+              'As you asked, the personal data in your Emanet Saha account was erased and the account closed.',
+              'Payment and accounting records the law requires us to keep stay until their period ends.',
+              `A sealed copy of what was erased is kept for at most ${String(notice.years)} years, only for legal obligations and possible disputes, with restricted and recorded access; it is destroyed when the period ends. This is the last email we send to this address.`,
+            ],
+      };
+    case 'erasure_refused':
+      return {
+        ...base,
+        subject: tr
+          ? 'Veri silme talebiniz hakkında karar'
+          : 'A decision on your request to erase your data',
+        paragraphs: tr
+          ? [
+              'Kişisel verilerinizin silinmesi talebiniz şu an yerine getirilemedi.',
+              `Gerekçe: ${notice.reason}`,
+              'Karara itiraz etmek için bu e-postayı yanıtlayabilir veya Kişisel Verileri Koruma Kurulu’na şikâyette bulunabilirsiniz.',
+            ]
+          : [
+              'Your request to have your personal data erased could not be carried out now.',
+              `Reason: ${notice.reason}`,
+              'To object, reply to this email; you can also complain to the Personal Data Protection Board.',
+            ],
+        action: { label: tr ? 'Talebimi gör' : 'See my request', url: `${saha}/privacy` },
       };
   }
 }

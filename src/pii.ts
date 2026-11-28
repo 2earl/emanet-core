@@ -93,3 +93,44 @@ export async function keyedHash(label: string, value: string): Promise<string> {
   );
   return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+// ---- Files ----------------------------------------------------------------------------------------
+
+/** "EMA" and a version: a sealed file says what it is before anything tries to open it. */
+const FILE_MAGIC = [0x45, 0x4d, 0x41, 0x01];
+
+/** Seals a file's bytes: magic, 12 bytes of IV, then AES-256-GCM over the content. */
+export async function sealBytes(
+  data: ArrayBuffer | Uint8Array,
+  context: string,
+): Promise<Uint8Array> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const sealed = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: encoder.encode(context) },
+      await aesKey(),
+      data,
+    ),
+  );
+  const out = new Uint8Array(FILE_MAGIC.length + iv.length + sealed.length);
+  out.set(FILE_MAGIC, 0);
+  out.set(iv, FILE_MAGIC.length);
+  out.set(sealed, FILE_MAGIC.length + iv.length);
+  return out;
+}
+
+export async function openBytes(
+  data: ArrayBuffer | Uint8Array,
+  context: string,
+): Promise<Uint8Array> {
+  const all = data instanceof Uint8Array ? data : new Uint8Array(data);
+  if (all.length < 16 + 16 || FILE_MAGIC.some((byte, i) => all[i] !== byte)) {
+    throw new Error('not a sealed file');
+  }
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: all.slice(4, 16), additionalData: encoder.encode(context) },
+    await aesKey(),
+    all.slice(16),
+  );
+  return new Uint8Array(plain);
+}

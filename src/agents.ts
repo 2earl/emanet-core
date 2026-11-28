@@ -42,6 +42,10 @@ export interface AgentProfile {
   /** What staff asked the applicant to correct, while the application is back with them. */
   review_note: string | null;
   address: string | null;
+  /** The person's data was erased: nothing can be done with this account. */
+  erased: boolean;
+  /** Things staff asked for that the agent hasn't answered yet. */
+  requests_open: number;
 }
 
 export async function agentProfile(db: D1Database, agentId: string): Promise<Result<AgentProfile>> {
@@ -49,7 +53,8 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     .prepare(
       `SELECT status, legal_name, city, phone, iban, iban_verified_at, tax_profile, vkn,
          terms_version, submitted_at, strikes, email, email_verified_at, tckn_hash, birth_year,
-         review_note, address,
+         review_note, address, erased_at,
+         (SELECT count(*) FROM agent_requests r WHERE r.agent_id = a.user_id AND r.status = 'open') AS requests_open,
          (SELECT count(*) FROM claims WHERE agent_id = a.user_id AND closed_at IS NULL) AS open_claims
        FROM agents a WHERE user_id = ?`,
     )
@@ -73,6 +78,8 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
       birth_year: number | null;
       review_note: string | null;
       address: string | null;
+      erased_at: number | null;
+      requests_open: number;
     }>();
   if (!row) return fail('not_found');
   return ok({
@@ -94,6 +101,8 @@ export async function agentProfile(db: D1Database, agentId: string): Promise<Res
     review_note: row.status === 'applied' ? row.review_note : null,
     address: row.address,
     open_claims: row.open_claims,
+    erased: row.erased_at !== null,
+    requests_open: row.requests_open,
   });
 }
 
@@ -145,7 +154,7 @@ export async function updateProfile(
   const current = await agentProfile(db, agentId);
   if (!current.ok) return current;
   const profile = current.value;
-  if (profile.status === 'banned' || profile.status === 'suspended')
+  if (profile.erased || profile.status === 'banned' || profile.status === 'suspended')
     return fail('agent_not_active');
   const legalName = input.legalName.trim().replace(/\s+/g, ' ');
   const city = input.city.trim();
@@ -163,6 +172,14 @@ export async function updateProfile(
     return fail('invalid_vkn');
   }
   const locked = profile.status === 'active';
+  // What staff asked this agent to correct is open to change, even once active.
+  const { results: askedRows } = await db
+    .prepare(
+      `SELECT subject FROM agent_requests WHERE agent_id = ? AND kind = 'info' AND status = 'open'`,
+    )
+    .bind(agentId)
+    .all<{ subject: string }>();
+  const asked = new Set(askedRows.map((row) => row.subject));
   const address =
     typeof input.address === 'string' && input.address.trim()
       ? input.address.trim().replace(/\s+/g, ' ')
@@ -178,7 +195,7 @@ export async function updateProfile(
   let idSealed: string | null = null;
   let registryResult: 'passed' | 'review' | null = null;
   if (tckn) {
-    if (locked) return fail('profile_locked');
+    if (locked && !asked.has('id_number')) return fail('profile_locked');
     if (!validTckn(tckn)) return fail('invalid_tckn');
     if (
       birthYear === null ||
@@ -219,10 +236,11 @@ export async function updateProfile(
   }
   if (
     locked &&
-    (legalName !== profile.legal_name ||
-      city !== profile.city ||
-      input.taxProfile !== profile.tax_profile ||
-      (input.taxProfile === 'individual' ? null : vkn) !== profile.vkn)
+    ((legalName !== profile.legal_name && !asked.has('legal_name')) ||
+      (city !== profile.city && !asked.has('city')) ||
+      ((input.taxProfile !== profile.tax_profile ||
+        (input.taxProfile === 'individual' ? null : vkn) !== profile.vkn) &&
+        !asked.has('tax')))
   ) {
     return fail('profile_locked');
   }
