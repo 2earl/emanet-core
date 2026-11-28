@@ -104,6 +104,11 @@ export const SETTINGS = {
   ops_keep_days: spec('operations', 'days', 30, 7, 365),
   /** Whether admitting a company or an agent needs the lawyer's and accountant's sign-offs. */
   require_signoffs: spec('operations', 'switch', 1, 0, 1),
+  /**
+   * Development mode (docs/DESIGN.md §15): while on, staff-side gates that slow testing are lifted.
+   * It switches itself off after DEV_MODE_SECONDS and is changed only by `setDevMode`.
+   */
+  dev_mode: spec('operations', 'switch', 0, 0, 1),
 } as const satisfies Record<string, SettingSpec>;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -129,19 +134,46 @@ export function settingAllowed(key: string, value: unknown): key is SettingKey {
   return Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max;
 }
 
-export async function readSettings(db: D1Database): Promise<Settings> {
+/** How long development mode stays on once switched on. */
+export const DEV_MODE_SECONDS = 12 * 3600;
+
+const clock = (): number => Math.floor(Date.now() / 1000);
+
+export async function readSettings(db: D1Database, at: number = clock()): Promise<Settings> {
   const { results } = await db
-    .prepare('SELECT key, value FROM settings')
-    .all<{ key: string; value: string }>();
+    .prepare('SELECT key, value, updated_at FROM settings')
+    .all<{ key: string; value: string; updated_at: number | null }>();
   const settings: Settings = { ...SETTING_DEFAULTS };
+  let devSince: number | null = null;
   for (const row of results) {
     if (Object.hasOwn(SETTINGS, row.key)) {
       const value = Number(row.value);
       // A stored value outside today's range (the range was narrowed since) falls back.
       if (settingAllowed(row.key, value)) settings[row.key] = value;
+      if (row.key === 'dev_mode') devSince = row.updated_at;
     }
   }
+  // Development mode ends by itself: a forgotten switch can't leave the gates open.
+  if (settings.dev_mode === 1 && (devSince === null || at - devSince >= DEV_MODE_SECONDS)) {
+    settings.dev_mode = 0;
+  }
+  if (settings.dev_mode === 1) {
+    settings.require_signoffs = 0;
+    settings.require_documents = 0;
+  }
   return settings;
+}
+
+/** Whether development mode is on now, and until when. */
+export async function devModeStatus(
+  db: D1Database,
+  at: number = clock(),
+): Promise<{ active: boolean; until: number | null }> {
+  const row = await db
+    .prepare(`SELECT updated_at FROM settings WHERE key = 'dev_mode' AND value = '1'`)
+    .first<{ updated_at: number }>();
+  const until = row ? row.updated_at + DEV_MODE_SECONDS : null;
+  return until !== null && until > at ? { active: true, until } : { active: false, until: null };
 }
 
 export interface SettingInfo {
@@ -167,6 +199,14 @@ export async function settingsInfo(db: D1Database): Promise<SettingInfo[]> {
     const row = stored.get(key);
     const value = row ? Number(row.value) : NaN;
     const valid = row !== undefined && settingAllowed(key, value);
+    if (
+      key === 'dev_mode' &&
+      valid &&
+      value === 1 &&
+      clock() - (row.updated_at ?? 0) >= DEV_MODE_SECONDS
+    ) {
+      return { key, ...SETTINGS[key], value: 0, updated_by: null, updated_at: null };
+    }
     return {
       key,
       ...SETTINGS[key],

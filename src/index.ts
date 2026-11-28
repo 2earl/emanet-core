@@ -176,6 +176,7 @@ import { checkPayoutRule } from './pricing';
 import { provider, providerForStaff, setProvider } from './provider';
 import { fail, now, ok, type Result } from './result';
 import {
+  devModeStatus,
   readSettings,
   resetSetting,
   SETTINGS,
@@ -848,7 +849,8 @@ export class ControlApi extends WorkerEntrypoint<Env> {
 
   /** Changes a setting. The old and new values go into the audit log. */
   async setSetting(staffId: string, key: SettingKey, value: number) {
-    if (!settingAllowed(key, value)) return fail('invalid_setting');
+    // Development mode has its own entry: it ends by itself and is recorded as such.
+    if (key === 'dev_mode' || !settingAllowed(key, value)) return fail('invalid_setting');
     const at = now();
     const before = (await readSettings(this.env.DB))[key];
     if (before === value) return ok(null);
@@ -862,9 +864,31 @@ export class ControlApi extends WorkerEntrypoint<Env> {
     return ok(null);
   }
 
+  /** Development mode: on for twelve hours, or off. Staff's role is checked in Emanet Merkez. */
+  async setDevMode(staffId: string, on: boolean) {
+    const at = now();
+    const before = (await devModeStatus(this.env.DB, at)).active;
+    if (before === on) return ok(await devModeStatus(this.env.DB, at));
+    await this.env.DB.batch([
+      writeSetting(this.env.DB, 'dev_mode', on ? 1 : 0, staffId, at),
+      auditStatement(
+        this.env.DB,
+        at,
+        `staff:${staffId}`,
+        on ? 'dev_mode.on' : 'dev_mode.off',
+        'setting:dev_mode',
+      ),
+    ]);
+    return ok(await devModeStatus(this.env.DB, at));
+  }
+
+  async devMode() {
+    return ok(await devModeStatus(this.env.DB));
+  }
+
   /** Puts a setting back to its default. */
   async resetSetting(staffId: string, key: SettingKey) {
-    if (!Object.hasOwn(SETTINGS, key)) return fail('invalid_setting');
+    if (key === 'dev_mode' || !Object.hasOwn(SETTINGS, key)) return fail('invalid_setting');
     const at = now();
     const before = (await readSettings(this.env.DB))[key];
     await this.env.DB.batch([

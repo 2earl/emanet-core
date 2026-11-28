@@ -533,7 +533,10 @@ export async function approve(
   if (!row) return fail('not_found');
   if (row.status !== 'signed') return fail('not_signed', row.status);
   if (!row.org_id || !row.details || !row.price_list) return fail('incomplete');
-  if (row.invited_by === staffId) return fail('four_eyes');
+  // Another admin approves, except in development mode, where one person tests alone.
+  if (row.invited_by === staffId && (await readSettings(db)).dev_mode !== 1) {
+    return fail('four_eyes');
+  }
   if (await partnerByOrg(db, row.org_id)) return fail('partner_exists');
   const prices = checkPriceList(JSON.parse(row.price_list));
   if (!prices.ok) return prices;

@@ -123,6 +123,27 @@ describe('onboarding', () => {
     unwrap(await setProvider(db(), 'staff-1', PROVIDER, T0));
   });
 
+  it('lets the inviter approve while development mode is on', async () => {
+    const box = outbox();
+    const { id, user } = await ready(box);
+    unwrap(await signNow(id, user, box));
+    const setDevMode = async (on: boolean) => {
+      await db()
+        .prepare(
+          `INSERT INTO settings (key, value, updated_by, updated_at) VALUES ('dev_mode', ?, 'staff-1', ?)
+           ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        )
+        .bind(on ? '1' : '0', Math.floor(Date.now() / 1000))
+        .run();
+    };
+    await setDevMode(true);
+    try {
+      unwrap(await approve(db(), box.send, ORIGINS, 'staff-1', id, T0 + 300));
+    } finally {
+      await setDevMode(false);
+    }
+  });
+
   it('runs from invitation to an active partner', async () => {
     const box = outbox();
     const { id, user, org } = await ready(box);

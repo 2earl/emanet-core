@@ -753,3 +753,14 @@ notice says so. Its legal basis (art. 5/2-ç, 5/2-e) and its period are for the 
 - Gider pusulası and bank statements for payments to non-registered persons: muhasebenews.com
 - TCMB remote identity: NFC as preferred method: paratic.com
 - İş Bankası corporate API conditions: isbank.com.tr (API catalogue)
+
+## 15. Development mode (2026-11-28)
+
+Until there is a test environment, an owner can switch development mode on in Emanet Merkez
+(Settings → Operations, second factor fresh). `src/settings.ts` then reports `require_signoffs` and
+`require_documents` as off, and `onboarding.approve` lets the inviter approve their own invitation, so
+one person can walk a company or an agent through the whole flow. Money is untouched: IBAN checks and
+the second approver on large payouts stay. It ends by itself after twelve hours (`DEV_MODE_SECONDS`),
+is only changed through `setDevMode` (the generic setting calls refuse it), and `dev_mode.on` and
+`dev_mode.off` go to the audit log. Merkez shows a banner on every page while it is on. Records made in
+that time are real records: switch it on only with test data.
